@@ -1,378 +1,277 @@
 """
-Blender-based 3D rendering engine for STL files
-This script must be run with Blender's Python interpreter
+Blender scene setup and rendering for a single STL.
+
+Runs inside Blender's Python (the `blender` executable or the `bpy` pip
+module) via rendering/blender_job.py, never imported by the main process.
+
+The object turns on a turntable in front of a fixed camera and lights, so
+highlights sweep across the surface and the last frame flows straight into
+the first (seamless loop, which drives re-watches). Frames are rendered
+with a transparent background; the background is composited afterwards.
 """
-import bpy
 import math
-import sys
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Dict, Sequence
+
+import bpy
+from mathutils import Matrix, Vector
+
+from rendering.presets import MATERIAL_PRESETS
+
+# Normalised size: the model's bounding sphere gets this radius, so camera,
+# lights and clipping work the same for a 2 mm screw and a 2 m frame.
+MODEL_RADIUS = 1.0
+
+
 
 class BlenderRenderer:
-    def __init__(self, render_samples: int = 128, use_gpu: bool = True):
-        self.render_samples = render_samples
+    def __init__(self, engine: str = 'CYCLES', samples: int = 32, use_gpu: bool = True,
+                 gpu_backend: str = 'AUTO'):
+        self.engine = engine
+        self.samples = samples
         self.use_gpu = use_gpu
-        self.setup_blender()
+        self.gpu_backend = gpu_backend
 
-    def setup_blender(self):
-        """Configure Blender rendering settings"""
+    # ------------------------------------------------------------ scene
+    def reset_scene(self):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
         scene = bpy.context.scene
+        if scene.world is None:
+            scene.world = bpy.data.worlds.new('World')
+        return scene
 
-        # Set render engine
-        scene.render.engine = 'CYCLES'
-        scene.cycles.samples = self.render_samples
-        scene.cycles.use_denoising = False
+    def configure_render(self, scene, width: int, height: int):
+        scene.render.engine = self.engine
+        scene.render.resolution_x = width
+        scene.render.resolution_y = height
+        scene.render.resolution_percentage = 100
+        scene.render.film_transparent = True
+        scene.render.use_persistent_data = True
+        settings = scene.render.image_settings
+        settings.file_format = 'PNG'
+        settings.color_mode = 'RGBA'
+        settings.color_depth = '8'
+        settings.compression = 15
 
-        # GPU settings
-        if self.use_gpu:
-            scene.cycles.device = 'GPU'
+        # AgX (Blender 4+) handles bright highlights better than Filmic.
+        view = scene.view_settings
+        transforms = {item.identifier for item in view.bl_rna.properties['view_transform'].enum_items}
+        view.view_transform = 'AgX' if 'AgX' in transforms else 'Filmic'
+        try:
+            view.look = 'AgX - Medium High Contrast' if view.view_transform == 'AgX' else 'Medium High Contrast'
+        except TypeError:
+            view.look = 'None'
+
+        if self.engine == 'CYCLES':
+            cycles = scene.cycles
+            cycles.samples = self.samples
+            cycles.use_adaptive_sampling = True
+            cycles.use_denoising = True
+            cycles.max_bounces = 6
+            cycles.device = 'GPU' if self.use_gpu and self._enable_gpu() else 'CPU'
+            print(f'[cadbot] Cycles device: {cycles.device}')
+
+    def _enable_gpu(self) -> bool:
+        """Turn on the first GPU backend that has devices. False = use CPU."""
+        try:
             prefs = bpy.context.preferences.addons['cycles'].preferences
-            prefs.compute_device_type = 'CUDA'  # or 'OPTIX' for RTX cards
+        except KeyError:
+            return False
+        backends = ['OPTIX', 'CUDA', 'HIP', 'METAL', 'ONEAPI'] if self.gpu_backend == 'AUTO' else [self.gpu_backend]
+        for backend in backends:
+            try:
+                prefs.compute_device_type = backend
+            except TypeError:
+                continue  # backend not compiled into this Blender
             prefs.get_devices()
-            for device in prefs.devices:
-                device.use = True
+            gpus = [d for d in prefs.devices if d.type == backend]
+            if gpus:
+                for device in prefs.devices:
+                    device.use = device.type == backend
+                return True
+        return False
 
-        # Color management
-        scene.view_settings.view_transform = 'Filmic'
-        scene.view_settings.look = 'Medium High Contrast'
-
-        # Output settings
-        scene.render.film_transparent = False
-        scene.render.image_settings.file_format = 'PNG'
-        scene.render.image_settings.color_mode = 'RGB'
-        scene.render.image_settings.color_depth = '8'
-
-    def clear_scene(self):
-        """Remove all objects, cameras, and lights from scene"""
-        bpy.ops.object.select_all(action='SELECT')
-        bpy.ops.object.delete(use_global=False)
-
-        # Clear orphaned data
-        for block in bpy.data.meshes:
-            if block.users == 0:
-                bpy.data.meshes.remove(block)
-
-        for block in bpy.data.materials:
-            if block.users == 0:
-                bpy.data.materials.remove(block)
-
-    def import_stl(self, stl_path: Path) -> bpy.types.Object:
-        """Import STL file and return the object"""
-        # Import STL (Blender 4.0+ syntax)
-        bpy.ops.wm.stl_import(filepath=str(stl_path))
-
-        # Get the imported object (most recent)
-        obj = bpy.context.selected_objects[0]
-
-        # Center the object at world origin
-        bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY', center='BOUNDS')
-        obj.location = (0, 0, 0)
-
+    # ------------------------------------------------------------ model
+    def import_stl(self, stl_path: Path):
+        before = set(bpy.data.objects)
+        if hasattr(bpy.ops.wm, 'stl_import'):          # Blender 4.1+
+            bpy.ops.wm.stl_import(filepath=str(stl_path))
+        else:                                          # Blender <= 4.0
+            bpy.ops.import_mesh.stl(filepath=str(stl_path))
+        new_objects = [o for o in bpy.data.objects if o not in before and o.type == 'MESH']
+        if not new_objects:
+            raise RuntimeError(f'STL import produced no mesh: {stl_path}')
+        obj = new_objects[0]
+        bpy.context.view_layer.objects.active = obj
         return obj
 
-    def apply_material(self, obj: bpy.types.Object, 
-                       color_rgb: Tuple[float, float, float]):
-        """Apply solid color material to object"""
-        # Create material
-        mat = bpy.data.materials.new(name="ObjectMaterial")
-        mat.use_nodes = True
-        nodes = mat.node_tree.nodes
-        nodes.clear()
+    def normalize(self, obj):
+        """Centre on the bounding box and scale the bounding sphere to MODEL_RADIUS."""
+        mesh = obj.data
+        coords = [v.co for v in mesh.vertices]
+        lo = Vector((min(c.x for c in coords), min(c.y for c in coords), min(c.z for c in coords)))
+        hi = Vector((max(c.x for c in coords), max(c.y for c in coords), max(c.z for c in coords)))
+        center = (lo + hi) / 2
+        radius = max((c - center).length for c in coords) or 1.0
+        scale = MODEL_RADIUS / radius
+        for v in mesh.vertices:
+            v.co = (v.co - center) * scale
 
-        # Create shader nodes
-        node_bsdf = nodes.new(type='ShaderNodeBsdfPrincipled')
-        node_bsdf.location = (0, 0)
-        node_bsdf.inputs['Base Color'].default_value = (*color_rgb, 1.0)
-        node_bsdf.inputs['Metallic'].default_value = 0.1
-        node_bsdf.inputs['Roughness'].default_value = 0.3
-        node_bsdf.inputs['Specular IOR Level'].default_value = 0.5
+        # Stand the longest axis upright: the turntable spins around Z, so a
+        # tall model fills a 9:16 frame while a wide one would be tiny.
+        size = hi - lo
+        longest = max(range(3), key=lambda i: size[i])
+        if longest == 0:
+            mesh.transform(Matrix.Rotation(math.radians(90), 4, 'Y'))
+        elif longest == 1:
+            mesh.transform(Matrix.Rotation(math.radians(90), 4, 'X'))
+        mesh.update()
+        obj.location = (0, 0, 0)
+        obj.rotation_euler = (0, 0, 0)
+        obj.scale = (1, 1, 1)
 
-        node_output = nodes.new(type='ShaderNodeOutputMaterial')
-        node_output.location = (200, 0)
-
-        # Link nodes
-        links = mat.node_tree.links
-        links.new(node_bsdf.outputs['BSDF'], node_output.inputs['Surface'])
-
-        # Assign material to object
-        if obj.data.materials:
-            obj.data.materials[0] = mat
+        # CAD exports are triangle soups: smooth curved areas, keep hard edges.
+        bpy.ops.object.select_all(action='DESELECT')
+        obj.select_set(True)
+        if hasattr(bpy.ops.object, 'shade_smooth_by_angle'):   # 4.1+
+            bpy.ops.object.shade_smooth_by_angle(angle=math.radians(30))
         else:
-            obj.data.materials.append(mat)
+            bpy.ops.object.shade_smooth()
+            mesh.use_auto_smooth = True
+            mesh.auto_smooth_angle = math.radians(30)
 
-    def setup_world_background(self, background_rgb: Tuple[float, float, float]):
-        """Setup world background color"""
-        world = bpy.context.scene.world
+    def apply_material(self, obj, color_rgb: Sequence[float], preset: str):
+        mat = bpy.data.materials.new(name=f'cadbot_{preset}')
+        mat.use_nodes = True
+        bsdf = mat.node_tree.nodes.get('Principled BSDF')
+        bsdf.inputs['Base Color'].default_value = (*color_rgb, 1.0)
+        for name, value in MATERIAL_PRESETS.get(preset, MATERIAL_PRESETS['glossy_plastic']).items():
+            if name in bsdf.inputs:
+                bsdf.inputs[name].default_value = value
+        obj.data.materials.clear()
+        obj.data.materials.append(mat)
+
+    # ------------------------------------------------------------ camera & light
+    def setup_camera(self, scene, obj, width: int, height: int, lens_mm: float,
+                     elevation_deg: float, tilt_swing_deg: float, margin: float):
+        """Place the camera so the spinning, tilting model fills the frame without clipping.
+
+        Fits the turntable's real footprint (radius in XY, height in Z) rather than
+        the bounding sphere, which would waste most of a tall 9:16 frame.
+        """
+        cam_data = bpy.data.cameras.new('Camera')
+        cam_data.lens = lens_mm
+        cam_data.sensor_fit = 'AUTO'
+        camera = bpy.data.objects.new('Camera', cam_data)
+        scene.collection.objects.link(camera)
+        scene.camera = camera
+
+        # With AUTO fit the sensor width maps to the longer side (height in portrait).
+        fov_long = 2 * math.atan(cam_data.sensor_width / (2 * lens_mm))
+        fov_short = 2 * math.atan(math.tan(fov_long / 2) * min(width, height) / max(width, height))
+        fov_h, fov_v = (fov_short, fov_long) if height >= width else (fov_long, fov_short)
+
+        coords = [v.co for v in obj.data.vertices]
+        r_xy = max(math.hypot(c.x, c.y) for c in coords) or MODEL_RADIUS
+        half_z = max(abs(c.z) for c in coords) or MODEL_RADIUS
+        elev = math.radians(elevation_deg)
+        swing = math.radians(tilt_swing_deg)
+        # Apparent vertical half-size over the whole tilt range.
+        half_v = max(half_z * abs(math.cos(a)) + r_xy * abs(math.sin(a)) for a in (elev - swing, elev + swing))
+        # A point at radius r seen from distance d spans at most r / sqrt(d^2 - r^2).
+        distance = margin * max(r_xy / math.sin(fov_h / 2), half_v / math.sin(fov_v / 2))
+
+        camera.location = (0, -distance * math.cos(elev), distance * math.sin(elev))
+        camera.rotation_euler = (Vector((0, 0, 0)) - camera.location).to_track_quat('-Z', 'Y').to_euler()
+        cam_data.clip_start = distance * 0.01
+        cam_data.clip_end = distance * 10
+        return camera, distance
+
+    def setup_lighting(self, scene):
+        """Soft three-point light fixed to the camera side, plus a dim neutral world."""
+        def area(name, location, energy, size, color=(1, 1, 1)):
+            light = bpy.data.lights.new(name, type='AREA')
+            light.energy = energy
+            light.size = size
+            light.color = color
+            obj = bpy.data.objects.new(name, light)
+            obj.location = location
+            obj.rotation_euler = (Vector((0, 0, 0)) - Vector(location)).to_track_quat('-Z', 'Y').to_euler()
+            scene.collection.objects.link(obj)
+
+        area('Key', (-3.5, -4.0, 4.5), 900, 4.0, (1.0, 0.97, 0.92))
+        area('Fill', (4.5, -3.0, 1.5), 300, 5.0, (0.92, 0.96, 1.0))
+        area('Rim', (0.5, 5.0, 3.5), 700, 3.0)
+
+        world = scene.world
         world.use_nodes = True
-        nodes = world.node_tree.nodes
+        bg = world.node_tree.nodes.get('Background')
+        bg.inputs['Color'].default_value = (0.5, 0.5, 0.5, 1.0)
+        bg.inputs['Strength'].default_value = 0.35
 
-        # Get background node
-        bg_node = nodes.get('Background')
-        if bg_node:
-            bg_node.inputs['Color'].default_value = (*background_rgb, 1.0)
-            bg_node.inputs['Strength'].default_value = 1.0
+    # ------------------------------------------------------------ animation
+    def animate(self, scene, obj, camera, distance: float, total_frames: int, fps: int,
+                motion: str, tilt_swing_deg: float):
+        """Keyframe every frame so the motion is exact and loops seamlessly.
 
-    def setup_camera(self, obj: bpy.types.Object, 
-                     distance_multiplier: float = 2.5,
-                     elevation_angle: float = 20) -> bpy.types.Object:
+        turntable: one full Z turn plus a sine tilt; frame N+1 == frame 1.
+        reveal:    same, but the camera starts close on the model and pulls
+                   back over the first ~1.2 s (a hook that invites a re-watch).
         """
-        Setup camera with orbit around object
-
-        Args:
-            obj: Target object
-            distance_multiplier: Distance from object (multiplier of object size)
-            elevation_angle: Camera elevation in degrees
-
-        Returns:
-            Camera object
-        """
-        # Calculate object dimensions
-        dimensions = obj.dimensions
-        max_dim = max(dimensions)
-
-        # Calculate camera distance
-        distance = max_dim * distance_multiplier
-
-        # Create camera
-        bpy.ops.object.camera_add()
-        camera = bpy.context.active_object
-        camera.name = 'RenderCamera'
-
-        # Set camera as active
-        bpy.context.scene.camera = camera
-
-        # Position camera
-        elevation_rad = math.radians(elevation_angle)
-        camera.location.x = distance * math.cos(elevation_rad)
-        camera.location.y = 0
-        camera.location.z = distance * math.sin(elevation_rad)
-
-        # Point camera at object
-        direction = obj.location - camera.location
-        rot_quat = direction.to_track_quat('-Z', 'Y')
-        camera.rotation_euler = rot_quat.to_euler()
-
-        # Create empty at object center for orbit parent
-        bpy.ops.object.empty_add(type='PLAIN_AXES', location=obj.location)
-        empty = bpy.context.active_object
-        empty.name = 'OrbitEmpty'
-
-        # Parent camera to empty
-        camera.parent = empty
-
-        # Camera settings
-        camera.data.lens = 50  # 50mm lens
-        camera.data.sensor_width = 36  # Full frame sensor
-        camera.data.clip_end = distance * 10
-
-        return camera
-
-    def setup_lighting(self):
-        """Setup three-point lighting for object"""
-        # Key light (main light)
-        bpy.ops.object.light_add(type='AREA', location=(5, -5, 8))
-        key_light = bpy.context.active_object
-        key_light.name = 'KeyLight'
-        key_light.data.energy = 300
-        key_light.data.size = 5
-        key_light.rotation_euler = (math.radians(45), 0, math.radians(45))
-
-        # Fill light (softer, opposite side)
-        bpy.ops.object.light_add(type='AREA', location=(-5, 5, 5))
-        fill_light = bpy.context.active_object
-        fill_light.name = 'FillLight'
-        fill_light.data.energy = 150
-        fill_light.data.size = 5
-        fill_light.rotation_euler = (math.radians(45), 0, math.radians(-135))
-
-        # Rim light (back light for edge definition)
-        bpy.ops.object.light_add(type='AREA', location=(0, 6, 6))
-        rim_light = bpy.context.active_object
-        rim_light.name = 'RimLight'
-        rim_light.data.energy = 200
-        rim_light.data.size = 4
-        rim_light.rotation_euler = (math.radians(60), 0, 0)
-
-    def animate_camera_orbit(self, total_frames: int,
-                            fps: int = 30,
-                            axis: str = 'Z'):
-        """
-        Simple camera orbit through all axes, returning to start
-
-        Path: Z → XZ → X → XY → Y → YZ → back to Z
-
-        This creates a smooth loop showing the model from all angles
-        and ends at the same orientation it started.
-
-        Args:
-            total_frames: Total number of frames (e.g., 300 for 10 seconds @ 30fps)
-            fps: Frames per second
-            axis: Ignored (kept for compatibility)
-        """
-        # Setup scene animation parameters
-        scene = bpy.context.scene
         scene.frame_start = 1
         scene.frame_end = total_frames
         scene.render.fps = fps
 
-        # Get the empty object that controls camera rotation
-        # The camera is parented to this empty, so rotating the empty rotates the camera
-        empty = bpy.data.objects.get('OrbitEmpty')
-        if not empty:
-            raise ValueError("OrbitEmpty not found. Setup camera first.")
+        pivot = bpy.data.objects.new('Pivot', None)
+        scene.collection.objects.link(pivot)
+        obj.parent = pivot
 
-        # We will divide the animation into 6 equal segments
-        # Each segment shows a different view of the model
-        num_segments = 6
-        frames_per_segment = total_frames // num_segments
+        base_location = camera.location.copy()
+        reveal_frames = int(1.2 * fps)
+        swing = math.radians(tilt_swing_deg)
 
-        # Rotation amounts for each axis (in radians)
-        # We'll rotate 60 degrees per segment to complete 360 degrees total
-        rotation_amount = math.radians(60)  # 60 degrees
+        for frame in range(1, total_frames + 1):
+            t = (frame - 1) / total_frames            # 0 <= t < 1
+            pivot.rotation_euler = (swing * math.sin(2 * math.pi * t), 0.0, 2 * math.pi * t)
+            pivot.keyframe_insert('rotation_euler', frame=frame)
+            if motion == 'reveal':
+                progress = min(1.0, (frame - 1) / reveal_frames)
+                eased = 1 - (1 - progress) ** 3   # ease-out cubic
+                camera.location = base_location * (0.45 + 0.55 * eased)
+                camera.keyframe_insert('location', frame=frame)
 
-        # SEGMENT 0: Starting position (frame 1)
-        # No rotation yet - model shown from initial angle
-        frame_number = 1
-        x_rotation = 0.0
-        y_rotation = 0.0
-        z_rotation = 0.0
+        for anim_obj in (pivot, camera):
+            if anim_obj.animation_data and anim_obj.animation_data.action:
+                for fcurve in anim_obj.animation_data.action.fcurves:
+                    for key in fcurve.keyframe_points:
+                        key.interpolation = 'LINEAR'
 
-        empty.rotation_euler = (x_rotation, y_rotation, z_rotation)
-        empty.keyframe_insert(data_path="rotation_euler", frame=frame_number)
-        print(f"Frame {frame_number}: Start position (0°, 0°, 0°)")
-
-        # SEGMENT 1: Rotate around Z axis
-        # This shows the model spinning horizontally
-        frame_number = frames_per_segment * 1
-        z_rotation += rotation_amount  # Add 60° to Z
-
-        empty.rotation_euler = (x_rotation, y_rotation, z_rotation)
-        empty.keyframe_insert(data_path="rotation_euler", frame=frame_number)
-        print(f"Frame {frame_number}: Z axis rotation")
-
-        # SEGMENT 2: Rotate around X and Z axes (XZ plane)
-        # This adds vertical tilt while continuing horizontal spin
-        frame_number = frames_per_segment * 2
-        x_rotation += rotation_amount  # Add 60° to X
-        z_rotation += rotation_amount  # Add 60° to Z
-
-        empty.rotation_euler = (x_rotation, y_rotation, z_rotation)
-        empty.keyframe_insert(data_path="rotation_euler", frame=frame_number)
-        print(f"Frame {frame_number}: XZ plane rotation")
-
-        # SEGMENT 3: Rotate around X axis
-        # This continues the vertical tilt
-        frame_number = frames_per_segment * 3
-        x_rotation += rotation_amount  # Add 60° to X
-
-        empty.rotation_euler = (x_rotation, y_rotation, z_rotation)
-        empty.keyframe_insert(data_path="rotation_euler", frame=frame_number)
-        print(f"Frame {frame_number}: X axis rotation")
-
-        # SEGMENT 4: Rotate around X and Y axes (XY plane)
-        # This adds side-to-side rotation
-        frame_number = frames_per_segment * 4
-        x_rotation += rotation_amount  # Add 60° to X
-        y_rotation += rotation_amount  # Add 60° to Y
-
-        empty.rotation_euler = (x_rotation, y_rotation, z_rotation)
-        empty.keyframe_insert(data_path="rotation_euler", frame=frame_number)
-        print(f"Frame {frame_number}: XY plane rotation")
-
-        # SEGMENT 5: Rotate around Y axis
-        # This continues the side-to-side motion
-        frame_number = frames_per_segment * 5
-        y_rotation += rotation_amount  # Add 60° to Y
-
-        empty.rotation_euler = (x_rotation, y_rotation, z_rotation)
-        empty.keyframe_insert(data_path="rotation_euler", frame=frame_number)
-        print(f"Frame {frame_number}: Y axis rotation")
-
-        # SEGMENT 6: Rotate around Y and Z axes (YZ plane)
-        # This brings us back toward the starting position
-        frame_number = frames_per_segment * 6
-        y_rotation += rotation_amount  # Add 60° to Y
-        z_rotation += rotation_amount  # Add 60° to Z
-
-        empty.rotation_euler = (x_rotation, y_rotation, z_rotation)
-        empty.keyframe_insert(data_path="rotation_euler", frame=frame_number)
-        print(f"Frame {frame_number}: YZ plane rotation")
-
-        # FINAL POSITION: Complete the loop
-        # Return to starting orientation (360° = 0°)
-        # We've rotated 360° total, so we're back at the start
-        frame_number = total_frames
-        x_rotation = math.radians(360)  # Full rotation = back to start
-        y_rotation = math.radians(360)  # Full rotation = back to start  
-        z_rotation = math.radians(360)  # Full rotation = back to start
-
-        empty.rotation_euler = (x_rotation, y_rotation, z_rotation)
-        empty.keyframe_insert(data_path="rotation_euler", frame=frame_number)
-        print(f"Frame {frame_number}: Back to start (360°, 360°, 360°)")
-
-        # Set all keyframes to use linear interpolation
-        # This means the rotation speed is constant (no acceleration/deceleration)
-        for fcurve in empty.animation_data.action.fcurves:
-            for keyframe in fcurve.keyframe_points:
-                keyframe.interpolation = 'LINEAR'
-
-        print(f"Camera animation complete: {num_segments} segments, {total_frames} frames")
-
-    def render_frame_sequence(self, output_dir: Path, 
-                            width: int = 1080, 
-                            height: int = 1920):
-        """
-        Render complete frame sequence
-
-        Args:
-            output_dir: Directory to save frames
-            width: Frame width in pixels
-            height: Frame height in pixels
-        """
-        scene = bpy.context.scene
-        scene.render.resolution_x = width
-        scene.render.resolution_y = height
-        scene.render.resolution_percentage = 100
-
-        # Set output path with frame number placeholder
+    # ------------------------------------------------------------ entry point
+    def render(self, job: Dict) -> Path:
+        output_dir = Path(job['output_dir'])
         output_dir.mkdir(parents=True, exist_ok=True)
+        for stale in output_dir.glob('frame_*.png'):
+            stale.unlink()
+
+        width, height = job['width'], job['height']
+        scene = self.reset_scene()
+        self.configure_render(scene, width, height)
+
+        obj = self.import_stl(Path(job['stl_path']))
+        self.normalize(obj)
+        self.apply_material(obj, job['object_color'], job.get('material', 'glossy_plastic'))
+
+        camera, distance = self.setup_camera(
+            scene, obj, width, height, job.get('lens_mm', 50.0), job.get('elevation_deg', 22.0),
+            job.get('tilt_swing_deg', 12.0), job.get('distance_margin', 1.1))
+        self.setup_lighting(scene)
+        self.animate(scene, obj, camera, distance, job['total_frames'], job['fps'],
+                     job.get('motion', 'turntable'), job.get('tilt_swing_deg', 12.0))
+
         scene.render.filepath = str(output_dir / 'frame_')
+        bpy.ops.render.render(animation=True)
 
-        # Render animation
-        bpy.ops.render.render(animation=True, write_still=True)
-
-    def render_video(self, stl_path: Path, 
-                    output_dir: Path,
-                    object_color: Tuple[float, float, float],
-                    background_color: Tuple[float, float, float],
-                    total_frames: int = 750,
-                    fps: int = 30,
-                    width: int = 1080,
-                    height: int = 1920) -> Path:
-        """
-        Complete rendering pipeline
-
-        Returns:
-            Path to render output directory
-        """
-        # Clear scene
-        self.clear_scene()
-
-        # Import STL
-        obj = self.import_stl(stl_path)
-
-        # Apply colors
-        self.apply_material(obj, object_color)
-        self.setup_world_background(background_color)
-
-        # Setup camera and lighting
-        self.setup_camera(obj)
-        self.setup_lighting()
-
-        # Animate
-        self.animate_camera_orbit(total_frames, fps, axis='Z')
-
-        # Render
-        self.render_frame_sequence(output_dir, width, height)
-
+        rendered = sorted(output_dir.glob('frame_*.png'))
+        if len(rendered) != job['total_frames']:
+            raise RuntimeError(f"expected {job['total_frames']} frames, got {len(rendered)}")
         return output_dir

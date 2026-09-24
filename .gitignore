@@ -1,0 +1,19 @@
+# Local state and outputs
+models.db
+logs/
+data/work/
+data/output_videos/
+data/exports/
+data/renders/
+secrets/
+.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Blender download from Setup.sh
+blender/

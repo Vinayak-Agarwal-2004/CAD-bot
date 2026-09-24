@@ -1,280 +1,165 @@
 """
-Main controller for STL to Video rendering pipeline
-"""
-import sys
-import time
-import logging
-from pathlib import Path
-from typing import Optional
-import random
+CAD-bot: turn CAD models into shorts and grow an audience on YouTube,
+Instagram and TikTok.
 
-# Import project modules
-from config import *
-from database.db_manager import DatabaseManager
-from rendering.color_generator import ColorGenerator
-from rendering.video_compositor import VideoCompositor
+    python main.py scan                 # register + score STL files
+    python main.py produce -n 3         # render the 3 most interesting models
+    python main.py render part.stl      # one-off video for a specific file
+    python main.py schedule             # assign posting slots on connected platforms
+    python main.py publish              # post whatever is due (run from cron)
+    python main.py collect              # pull views/likes/comments
+    python main.py report               # what's working, per choice
+    python main.py run -n 1             # scan + produce + schedule + publish + collect
+    python main.py auth youtube         # one-time OAuth
+    python main.py link 12 7301234567   # attach a TikTok draft's final video id to post 12
+    python main.py stats
+"""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+import config
 from utils.logger import setup_logger
 
-# Setup logging
-logger = setup_logger(BASE_DIR / 'logs')
 
-class RenderPipeline:
-    def __init__(self):
-        self.db = DatabaseManager(DB_PATH)
-        self.color_gen = ColorGenerator()
-        self.compositor = VideoCompositor(fps=FPS)
-
-    def scan_stl_directory(self):
-        """Scan STL directory and add files to database"""
-        logger.info(f"Scanning {STL_DIR} for STL files...")
-
-        stl_files = list(STL_DIR.glob('**/*.stl'))
-        logger.info(f"Found {len(stl_files)} STL files")
-
-        added_count = 0
-        for stl_file in stl_files:
-            file_id = self.db.add_stl_file(stl_file)
-            if file_id:
-                added_count += 1
-
-        logger.info(f"Added {added_count} new files to database")
-
-    def render_single_file(self, stl_path: Path) -> Optional[Path]:
-        """
-        Render a single STL file to video
-
-        Args:
-            stl_path: Path to STL file
-
-        Returns:
-            Path to output video or None if failed
-        """
-        start_time = time.time()
-
-        try:
-            logger.info(f"Processing: {stl_path.name}")
-
-            # Generate colors
-            palette = self.color_gen.get_color_palette()
-            logger.info(f"Object color: {palette['object_hex']}")
-            logger.info(f"Background color: {palette['background_hex']}")
-
-            # Get or create database entry
-            file_id = self.db.add_stl_file(stl_path)
-            job_id = self.db.create_render_job(
-                file_id,
-                palette['object_rgb'],
-                palette['background_rgb']
-            )
-
-            # Create output directories
-            render_dir = RENDERS_DIR / stl_path.stem
-            render_dir.mkdir(parents=True, exist_ok=True)
-
-            output_video = OUTPUT_DIR / f"{stl_path.stem}.mp4"
-
-            # Call Blender renderer using subprocess
-            # This must be done via subprocess to use Blender's Python
-            blender_script = self._generate_blender_script(
-                stl_path,
-                render_dir,
-                palette['object_rgb'],
-                palette['background_rgb']
-            )
-
-            # Save temporary Blender script
-            temp_script = BASE_DIR / 'temp_render_script.py'
-            with open(temp_script, 'w') as f:
-                f.write(blender_script)
-
-            # Run Blender in background mode
-            import subprocess
-            blender_cmd = [
-                'blender',  # or full path to Blender executable
-                '--background',
-                '--python', str(temp_script)
-            ]
-
-            logger.info("Running Blender render...")
-            result = subprocess.run(
-                blender_cmd,
-                capture_output=True,
-                text=True,
-                timeout=3600  # 1 hour timeout
-            )
-
-            if result.returncode != 0:
-                raise RuntimeError(f"Blender render failed: {result.stderr}")
-
-            logger.info("Blender render completed")
-
-            # Compose video from frames (without audio first)
-            logger.info("Creating video from frames...")
-            temp_video = OUTPUT_DIR / f"{stl_path.stem}_temp.mp4"
-
-            self.compositor.create_video_from_frames(
-                render_dir,
-                temp_video,
-                width=VIDEO_WIDTH,
-                height=VIDEO_HEIGHT
-            )
-
-            # Add random audio from audio-assets folder
-            logger.info("Adding audio to video...")
-            output_video = self.compositor.add_random_audio(
-                temp_video,
-                OUTPUT_DIR / f"{stl_path.stem}.mp4",
-                AUDIO_DIR
-            )
-
-            # Clean up temporary video without audio
-            if temp_video.exists():
-                temp_video.unlink()
+def cmd_scan(pipeline, args):
+    pipeline.scan()
 
 
-            # Update database
-            render_duration = time.time() - start_time
-            self.db.update_render_job(
-                job_id,
-                status='completed',
-                output_path=str(output_video),
-                render_duration=render_duration
-            )
-
-            logger.info(f"✓ Completed in {render_duration:.2f}s: {output_video}")
-
-            # Clean up temporary files
-            temp_script.unlink()
-
-            # Optionally clean up frame files to save space
-            # for frame in render_dir.glob('*.png'):
-            #     frame.unlink()
-
-            return output_video
-
-        except Exception as e:
-            logger.error(f"✗ Error rendering {stl_path.name}: {str(e)}")
-
-            # Update database with error
-            if 'job_id' in locals():
-                self.db.update_render_job(
-                    job_id,
-                    status='failed',
-                    error_message=str(e)
-                )
-
-            return None
-
-    def _generate_blender_script(self, stl_path: Path, output_dir: Path,
-                                object_color: tuple, background_color: tuple) -> str:
-        """Generate Python script for Blender to execute"""
-        return f'''
-import sys
-sys.path.append(r"{BASE_DIR}")
-
-from rendering.blender_renderer import BlenderRenderer
-from pathlib import Path
-
-# Initialize renderer
-renderer = BlenderRenderer(
-    render_samples={RENDER_SAMPLES},
-    use_gpu={USE_GPU}
-)
-
-# Render video frames
-renderer.render_video(
-    stl_path=Path(r"{stl_path}"),
-    output_dir=Path(r"{output_dir}"),
-    object_color={object_color},
-    background_color={background_color},
-    total_frames={TOTAL_FRAMES},
-    fps={FPS},
-    width={VIDEO_WIDTH},
-    height={VIDEO_HEIGHT}
-)
-'''
-
-    def process_queue(self, limit: Optional[int] = None):
-        """
-        Process pending files from database
-
-        Args:
-            limit: Maximum number of files to process (None = all)
-        """
-        pending_files = self.db.get_pending_files(limit=limit)
-
-        if not pending_files:
-            logger.info("No pending files to process")
-            return
-
-        logger.info(f"Processing {len(pending_files)} files...")
-
-        success_count = 0
-        for file_data in pending_files:
-            stl_path = Path(file_data['filepath'])
-            result = self.render_single_file(stl_path)
-            if result:
-                success_count += 1
-
-        logger.info(f"Completed: {success_count}/{len(pending_files)} successful")
-
-        # Print statistics
-        stats = self.db.get_statistics()
-        logger.info(f"Statistics: {stats}")
-
-    def process_all(self):
-        """Scan directory and process all files"""
-        self.scan_stl_directory()
-        self.process_queue()
+def cmd_produce(pipeline, args):
+    overrides = {k: v for k, v in (('format', args.format), ('palette', args.palette),
+                                   ('material', args.material)) if v}
+    pipeline.produce(limit=args.count, overrides=overrides, preview=args.preview)
 
 
-def main():
-    """Main entry point"""
-    logger.info("="*60)
-    logger.info("STL to Video Rendering Pipeline")
-    logger.info("="*60)
+def cmd_render(pipeline, args):
+    from content.model_analyzer import evaluate, file_sha256
+    path = Path(args.stl).resolve()
+    if not path.exists():
+        sys.exit(f'File not found: {path}')
+    model_id = pipeline.db.add_model(path, file_sha256(path))
+    stats, score, _ = evaluate(path, 0, 10 ** 9)       # explicit request: don't filter
+    pipeline.db.set_model_analysis(model_id, stats, score, 'pending')
+    overrides = {k: v for k, v in (('format', args.format),) if v}
+    video_id = pipeline.produce_one(pipeline.db.get_model(model_id), pipeline.engine(), overrides, args.preview)
+    if not video_id:
+        sys.exit(1)
 
-    pipeline = RenderPipeline()
 
-    # Check command line arguments
-    if len(sys.argv) > 1:
-        command = sys.argv[1]
+def cmd_schedule(pipeline, args):
+    pipeline.schedule(days_ahead=args.days)
 
-        if command == 'scan':
-            # Just scan and add to database
-            pipeline.scan_stl_directory()
 
-        elif command == 'process':
-            # Process queue
-            limit = int(sys.argv[2]) if len(sys.argv) > 2 else None
-            pipeline.process_queue(limit=limit)
+def cmd_publish(pipeline, args):
+    pipeline.publish_due(dry_run=args.dry_run)
 
-        elif command == 'render':
-            # Render specific file
-            if len(sys.argv) < 3:
-                logger.error("Usage: python main.py render <stl_file_path>")
-                sys.exit(1)
 
-            stl_path = Path(sys.argv[2])
-            if not stl_path.exists():
-                logger.error(f"File not found: {stl_path}")
-                sys.exit(1)
+def cmd_collect(pipeline, args):
+    pipeline.collect_metrics()
 
-            pipeline.render_single_file(stl_path)
 
-        elif command == 'all':
-            # Scan and process everything
-            pipeline.process_all()
+def cmd_report(pipeline, args):
+    engine = pipeline.engine()
+    if not engine.rows:
+        print(f'No posts older than {config.METRICS_MATURITY_HOURS}h with metrics yet. '
+              'Publish, wait, then run `collect`.')
+        return
+    print(f'Based on {len(engine.rows)} matured posts. "lift" = average log-views vs your typical post.\n')
+    for dim, arms in engine.report().items():
+        if not arms:
+            continue
+        print(dim.upper())
+        for arm, s in arms.items():
+            print(f"  {arm:<28} lift {s['mean']:+.2f}  posts {s['n']:<4} median views {s['median_views']:,.0f}")
+        print()
 
-        else:
-            logger.error(f"Unknown command: {command}")
-            logger.info("Available commands: scan, process, render, all")
-            sys.exit(1)
-    else:
-        # Default: process all
-        pipeline.process_all()
 
-    logger.info("Pipeline finished")
+def cmd_run(pipeline, args):
+    pipeline.scan()
+    pipeline.produce(limit=args.count, preview=args.preview)
+    pipeline.schedule(days_ahead=args.days)
+    pipeline.publish_due()
+    pipeline.collect_metrics()
+
+
+def cmd_auth(pipeline, args):
+    if args.platform != 'youtube':
+        sys.exit('Only YouTube uses an interactive login; Instagram and TikTok take tokens in .env')
+    pipeline.publishers['youtube'].authorize(interactive=True)
+    print(f'Saved YouTube token to {config.YOUTUBE_TOKEN_FILE}')
+
+
+def cmd_link(pipeline, args):
+    pipeline.db.mark_post(args.post_id, 'posted', remote_id=args.remote_id, url=args.url)
+    print(f'Post {args.post_id} linked to {args.remote_id}')
+
+
+def cmd_stats(pipeline, args):
+    print(json.dumps(pipeline.db.get_statistics(), indent=2))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description='CAD models -> shorts for YouTube, Instagram and TikTok')
+    sub = parser.add_subparsers(dest='command', required=True)
+
+    sub.add_parser('scan', help='register and score STL files').set_defaults(func=cmd_scan)
+
+    produce = sub.add_parser('produce', help='render videos for the best unrendered models')
+    produce.add_argument('-n', '--count', type=int, default=1)
+    produce.add_argument('--format', choices=_formats())
+    produce.add_argument('--palette')
+    produce.add_argument('--material')
+    produce.add_argument('--preview', action='store_true', help='half resolution, fewer samples')
+    produce.set_defaults(func=cmd_produce)
+
+    render = sub.add_parser('render', help='make a video from one STL file')
+    render.add_argument('stl')
+    render.add_argument('--format', choices=_formats())
+    render.add_argument('--preview', action='store_true')
+    render.set_defaults(func=cmd_render)
+
+    schedule = sub.add_parser('schedule', help='assign posting times on connected platforms')
+    schedule.add_argument('--days', type=int, default=7, help='how far ahead to fill the calendar')
+    schedule.set_defaults(func=cmd_schedule)
+
+    publish = sub.add_parser('publish', help='post everything that is due')
+    publish.add_argument('--dry-run', action='store_true')
+    publish.set_defaults(func=cmd_publish)
+
+    sub.add_parser('collect', help='fetch post metrics').set_defaults(func=cmd_collect)
+    sub.add_parser('report', help='show which choices perform best').set_defaults(func=cmd_report)
+    sub.add_parser('stats', help='pipeline counts').set_defaults(func=cmd_stats)
+
+    run = sub.add_parser('run', help='scan, produce, schedule, publish and collect (for cron)')
+    run.add_argument('-n', '--count', type=int, default=1)
+    run.add_argument('--days', type=int, default=7)
+    run.add_argument('--preview', action='store_true')
+    run.set_defaults(func=cmd_run)
+
+    auth = sub.add_parser('auth', help='one-time platform login')
+    auth.add_argument('platform', choices=['youtube'])
+    auth.set_defaults(func=cmd_auth)
+
+    link = sub.add_parser('link', help='record the final id of a post finished in the app (TikTok drafts)')
+    link.add_argument('post_id', type=int)
+    link.add_argument('remote_id')
+    link.add_argument('--url')
+    link.set_defaults(func=cmd_link)
+    return parser
+
+
+def _formats():
+    from content.formats import FORMATS
+    return list(FORMATS)
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    config.ensure_dirs()
+    setup_logger(config.LOG_DIR)
+    from pipeline import Pipeline
+    args.func(Pipeline(), args)
 
 
 if __name__ == '__main__':

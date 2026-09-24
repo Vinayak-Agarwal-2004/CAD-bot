@@ -1,115 +1,82 @@
 """
-Color generation with eye-soothing palettes and contrasting backgrounds
+Colour palettes: an object colour plus a two-tone background gradient that
+contrasts with it, grouped into named families the experiment engine can
+compare (e.g. soft pastels vs. bold colours on a dark background).
 """
 import colorsys
 import random
-from typing import Tuple
+from typing import Dict, Optional, Tuple
+
+RGB = Tuple[float, float, float]
+
+# hue ranges, saturation range, value range for the OBJECT colour,
+# and whether the background should be dark or light.
+PALETTE_FAMILIES = {
+    'pastel': {'hues': [(0.0, 1.0)], 'sat': (0.25, 0.45), 'val': (0.85, 0.95), 'bg': 'dark'},
+    'muted': {'hues': [(0.0, 1.0)], 'sat': (0.35, 0.55), 'val': (0.60, 0.75), 'bg': 'light'},
+    'calm_blues': {'hues': [(0.50, 0.65)], 'sat': (0.30, 0.50), 'val': (0.70, 0.85), 'bg': 'dark'},
+    'warm_earth': {'hues': [(0.03, 0.12)], 'sat': (0.40, 0.60), 'val': (0.65, 0.80), 'bg': 'dark'},
+    'bold_pop': {'hues': [(0.0, 1.0)], 'sat': (0.70, 0.90), 'val': (0.85, 1.00), 'bg': 'dark'},
+    'studio_white': {'hues': [(0.0, 1.0)], 'sat': (0.00, 0.06), 'val': (0.88, 0.96), 'bg': 'color'},
+}
+
+
+def luminance(rgb: RGB) -> float:
+    """Relative luminance (WCAG) of an sRGB colour in 0-1."""
+    def lin(c):
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (lin(c) for c in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast_ratio(a: RGB, b: RGB) -> float:
+    la, lb = sorted((luminance(a), luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def rgb_to_hex(rgb: RGB) -> str:
+    return '#' + ''.join(f'{max(0, min(255, round(c * 255))):02x}' for c in rgb)
+
 
 class ColorGenerator:
-    # Eye-soothing color palettes
-    SOOTHING_PALETTES = {
-        'pastel': {
-            'hue_ranges': [(0.0, 1.0)],
-            'saturation': (0.25, 0.45),
-            'value': (0.85, 0.95)
-        },
-        'muted': {
-            'hue_ranges': [(0.0, 1.0)],
-            'saturation': (0.35, 0.55),
-            'value': (0.60, 0.75)
-        },
-        'calm_blues': {
-            'hue_ranges': [(0.50, 0.65)],
-            'saturation': (0.30, 0.50),
-            'value': (0.70, 0.85)
-        },
-        'warm_earth': {
-            'hue_ranges': [(0.05, 0.15), (0.85, 0.95)],
-            'saturation': (0.40, 0.60),
-            'value': (0.65, 0.80)
-        },
-        'soft_greens': {
-            'hue_ranges': [(0.25, 0.45)],
-            'saturation': (0.30, 0.50),
-            'value': (0.70, 0.85)
-        }
-    }
+    def __init__(self, seed: Optional[int] = None):
+        self.rng = random.Random(seed)
 
-    @staticmethod
-    def generate_random_soothing_color() -> Tuple[float, float, float]:
-        """Generate a random eye-soothing color in RGB (0-1 range)"""
-        # Select random palette
-        palette = random.choice(list(ColorGenerator.SOOTHING_PALETTES.values()))
+    def object_color(self, family: str) -> RGB:
+        spec = PALETTE_FAMILIES[family]
+        lo, hi = self.rng.choice(spec['hues'])
+        hue = self.rng.uniform(lo, hi) % 1.0
+        return colorsys.hsv_to_rgb(hue, self.rng.uniform(*spec['sat']), self.rng.uniform(*spec['val']))
 
-        # Select hue from available ranges
-        hue_range = random.choice(palette['hue_ranges'])
-        hue = random.uniform(hue_range[0], hue_range[1])
+    def background(self, obj: RGB, mode: str) -> Tuple[RGB, RGB]:
+        """Return (top, bottom) gradient colours contrasting with the object."""
+        h, s, v = colorsys.rgb_to_hsv(*obj)
+        comp = (h + 0.5 + self.rng.uniform(-0.08, 0.08)) % 1.0
+        if mode == 'dark':
+            top = colorsys.hsv_to_rgb(comp, 0.35 + 0.2 * self.rng.random(), 0.22)
+            bottom = colorsys.hsv_to_rgb(comp, 0.45, 0.07)
+        elif mode == 'light':
+            top = colorsys.hsv_to_rgb(comp, 0.10, 0.97)
+            bottom = colorsys.hsv_to_rgb(comp, 0.18, 0.80)
+        else:  # 'color': saturated backdrop for a white/grey object
+            hue = self.rng.random()
+            top = colorsys.hsv_to_rgb(hue, 0.55, 0.75)
+            bottom = colorsys.hsv_to_rgb((hue + 0.06) % 1.0, 0.70, 0.35)
+        return top, bottom
 
-        # Select saturation and value
-        saturation = random.uniform(*palette['saturation'])
-        value = random.uniform(*palette['value'])
-
-        # Convert HSV to RGB
-        rgb = colorsys.hsv_to_rgb(hue, saturation, value)
-        return rgb
-
-    @staticmethod
-    def generate_contrasting_color(base_color: Tuple[float, float, float], 
-                                   contrast_level: str = 'high') -> Tuple[float, float, float]:
-        """
-        Generate a contrasting background color
-
-        Args:
-            base_color: RGB tuple (0-1 range)
-            contrast_level: 'high', 'medium', or 'low'
-
-        Returns:
-            RGB tuple (0-1 range)
-        """
-        # Convert to HSV
-        h, s, v = colorsys.rgb_to_hsv(*base_color)
-
-        # Adjust based on contrast level
-        if contrast_level == 'high':
-            # Complementary hue + opposite value
-            new_h = (h + 0.5) % 1.0
-            new_v = 0.95 if v < 0.5 else 0.15
-            new_s = max(0.1, s * 0.5)  # Reduce saturation for background
-
-        elif contrast_level == 'medium':
-            # Split complementary
-            new_h = (h + random.choice([0.4, 0.6])) % 1.0
-            new_v = 0.85 if v < 0.5 else 0.25
-            new_s = max(0.1, s * 0.6)
-
-        else:  # low contrast
-            # Analogous with value difference
-            new_h = (h + random.uniform(-0.1, 0.1)) % 1.0
-            new_v = 0.75 if v < 0.5 else 0.35
-            new_s = max(0.1, s * 0.7)
-
-        # Convert back to RGB
-        rgb = colorsys.hsv_to_rgb(new_h, new_s, new_v)
-        return rgb
-
-    @staticmethod
-    def rgb_to_hex(rgb: Tuple[float, float, float]) -> str:
-        """Convert RGB (0-1) to hex color code"""
-        r, g, b = [int(c * 255) for c in rgb]
-        return f'#{r:02x}{g:02x}{b:02x}'
-
-    @staticmethod
-    def get_color_palette() -> dict:
-        """Generate a complete color palette for rendering"""
-        object_color = ColorGenerator.generate_random_soothing_color()
-        background_color = ColorGenerator.generate_contrasting_color(
-            object_color, 
-            contrast_level='high'
-        )
-
+    def get_color_palette(self, family: Optional[str] = None) -> Dict:
+        family = family or self.rng.choice(list(PALETTE_FAMILIES))
+        obj = self.object_color(family)
+        top, bottom = self.background(obj, PALETTE_FAMILIES[family]['bg'])
+        # Make sure the object never melts into the background.
+        mid = tuple((a + b) / 2 for a, b in zip(top, bottom))
+        if contrast_ratio(obj, mid) < 2.0:
+            top, bottom = self.background(obj, 'dark' if luminance(obj) > 0.3 else 'light')
         return {
-            'object_rgb': object_color,
-            'background_rgb': background_color,
-            'object_hex': ColorGenerator.rgb_to_hex(object_color),
-            'background_hex': ColorGenerator.rgb_to_hex(background_color)
+            'family': family,
+            'object_rgb': tuple(round(c, 4) for c in obj),
+            'background_top': tuple(round(c, 4) for c in top),
+            'background_bottom': tuple(round(c, 4) for c in bottom),
+            'object_hex': rgb_to_hex(obj),
+            'background_hex': rgb_to_hex(top),
         }

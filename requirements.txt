@@ -1,5 +1,19 @@
-trimesh==4.5.0
-numpy==1.26.0
-ffmpeg-python==0.2.0
-Pillow==10.4.0
-tqdm==4.66.0
+# Mesh analysis
+trimesh>=4.5
+numpy>=1.26
+scipy>=1.11
+networkx>=3.0
+# Frame compositing
+Pillow>=10.4
+# Captions written by Claude (optional; falls back to templates)
+anthropic>=1.0
+# Publishing
+requests>=2.31
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.2
+google-auth-httplib2>=0.2
+python-dotenv>=1.0
+# Tests
+pytest>=8.0
+# Blender: either install Blender 4.2+ (Setup.sh does this) or, on Python 3.11,
+#   pip install bpy==4.2.0

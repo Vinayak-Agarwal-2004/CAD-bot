@@ -3,41 +3,32 @@ Logging configuration
 """
 import logging
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+from typing import Optional
 
-def setup_logger(log_dir: Path = None, level=logging.INFO):
-    """
-    Setup logging configuration
+_FORMAT = '%(asctime)s %(levelname)-7s %(name)s: %(message)s'
 
-    Args:
-        log_dir: Directory for log files
-        level: Logging level
-    """
-    # Create logger
+
+def setup_logger(log_dir: Optional[Path] = None, level=logging.INFO) -> logging.Logger:
+    """Configure the root logger once (safe to call repeatedly)."""
     logger = logging.getLogger()
     logger.setLevel(level)
+    if getattr(logger, '_cadbot_configured', False):
+        return logger
 
-    # Create formatters
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+    formatter = logging.Formatter(_FORMAT, datefmt='%Y-%m-%d %H:%M:%S')
+    console = logging.StreamHandler(sys.stdout)
+    console.setFormatter(formatter)
+    logger.addHandler(console)
 
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(level)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-
-    # File handler (if log_dir specified)
     if log_dir:
         log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / f'render_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
-
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(level)
+        file_handler = logging.FileHandler(log_dir / f'cadbot_{datetime.now():%Y%m%d}.log')
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
+    for noisy in ('googleapiclient.discovery_cache', 'urllib3', 'httpx', 'trimesh', 'anthropic'):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+    logger._cadbot_configured = True
     return logger
