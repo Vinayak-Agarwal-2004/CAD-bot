@@ -31,6 +31,13 @@ DEFAULT_QUESTIONS = {
     'rate_the_design': 'Rate it 1-10 in the comments.',
     'specs_breakdown': 'How would you manufacture this?',
 }
+# Caption opener when Claude isn't writing copy (the hook is already on screen).
+DEFAULT_CAPTIONS = {
+    'guess_the_object': 'A real part from an open CAD dataset, rendered in Blender.',
+    'satisfying_spin': 'One full turn of a CAD model, rendered in Blender.',
+    'rate_the_design': 'A real CAD design from an open dataset, rendered in Blender.',
+    'specs_breakdown': '{triangles} triangles of real CAD geometry, rendered in Blender.',
+}
 BASE_KEYWORDS = ['cad model', '3d render', 'engineering design', 'blender render']
 
 
@@ -77,7 +84,7 @@ def build_metadata(fmt: str, hook: str, stats: Dict, llm: Optional[Dict] = None,
     rng = rng or random.Random()
     llm = llm or {}
     question = llm.get('question') or DEFAULT_QUESTIONS[fmt]
-    caption_line = llm.get('caption') or fill_placeholders(hook, stats)
+    caption_line = llm.get('caption') or fill_placeholders(DEFAULT_CAPTIONS[fmt], stats)
     keywords = _dedupe([k.lower() for k in llm.get('keywords', [])] + BASE_KEYWORDS)[:6]
     llm_tags = llm.get('hashtags', [])
 

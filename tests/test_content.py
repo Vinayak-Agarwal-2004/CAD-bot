@@ -110,3 +110,9 @@ def test_every_hook_has_a_matching_cta(fmt):
     assert len(FORMATS[fmt]['ctas']) == len(FORMATS[fmt]['hooks'])
     assert cta_for(fmt, 'llm') == FORMATS[fmt]['ctas'][0]
     assert cta_for('rate_the_design', 0) == 'Drop your rating 1-10'
+
+
+def test_template_caption_does_not_repeat_the_question():
+    meta = build_metadata('guess_the_object', 'Can you guess what this is?', STATS, None, '', random.Random(0))
+    assert meta['tiktok']['caption'].count('?') == 1
+    assert '48,212 triangles' in build_metadata('specs_breakdown', 'x', STATS)['instagram']['caption']
