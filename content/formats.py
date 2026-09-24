@@ -72,6 +72,7 @@ FORMATS: Dict[str, Dict] = {
         'motion': 'turntable',
         'effect': 'cross_section',
         'hook_seconds': 2.2,
+        'cover': 'before_effect',   # don't show the inside on the thumbnail
         # Long or thin parts get sliced into floating fragments; chunky ones look great.
         'eligible': lambda stats: stats.get('aspect_ratio', 99) <= 3.5,
         'hashtags': ['#cutaway', '#crosssection', '#howitsmade', '#cad', '#engineering'],

@@ -172,6 +172,7 @@ class Pipeline:
             base_plan = OverlayPlan(palette['background_top'], palette['background_bottom'])
             # Cover/LLM still: mid-effect (cut open, parts apart) for effect formats.
             hero_frame = raw_frames[len(raw_frames) // 2 if fmt.get('effect') else len(raw_frames) // 8]
+            cover_frame = raw_frames[len(raw_frames) // 8] if fmt.get('cover') == 'before_effect' else hero_frame
             copy_stats = {**model['stats'], **({'parts': render_facts['parts']} if 'parts' in render_facts else {})}
 
             copy = None
@@ -202,9 +203,9 @@ class Pipeline:
             video_path = config.OUTPUT_DIR / f'cadbot_{video_id:05d}.mp4'
             encoder = VideoCompositor(fps, config.VIDEO_CRF, config.AUDIO_VOLUME_DB, config.AUDIO_FADE_SECONDS)
             encoder.encode(work / 'final', video_path, audio, preset='veryfast' if preview else 'medium')
-            cover_path = compositor.cover(hero_frame, config.OUTPUT_DIR / f'cadbot_{video_id:05d}_cover.jpg', plan)
+            cover_path = compositor.cover(cover_frame, config.OUTPUT_DIR / f'cadbot_{video_id:05d}_cover.jpg', plan)
 
-            cover_seconds = raw_frames.index(hero_frame) / fps
+            cover_seconds = raw_frames.index(cover_frame) / fps
             if plan.blur_reveal:
                 cover_seconds = max(cover_seconds, plan.reveal_seconds + 0.3)
             if plan.silhouette_seconds:

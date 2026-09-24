@@ -180,7 +180,9 @@ class FrameCompositor:
         label_img = self.text_block(plan.series_label, 40, 'stroke', max_lines=1) if plan.series_label else None
         handle_img = self.text_block(plan.handle, 38, 'stroke', max_lines=1) if plan.handle else None
 
-        hook_y = self.safe_top + int(150 * self.scale)
+        # Hook hangs from a fixed top edge below the series label, so a longer
+        # (multi-line) hook grows downwards instead of covering the label.
+        hook_y = self._below_label(hook_img)
         cta_y = self.safe_bottom - int(120 * self.scale)
         cta_start = max(plan.hook_seconds, duration - plan.cta_seconds)
         answer_start = max(plan.hook_seconds, duration - 1.8) if plan.answer else None
@@ -230,6 +232,11 @@ class FrameCompositor:
             written.append(path)
         return written
 
+    def _below_label(self, layer) -> int:
+        """Centre y for a layer whose top edge sits just under the series label."""
+        top = self.safe_top + int(75 * self.scale)
+        return top + (layer.height // 2 if layer is not None else int(80 * self.scale))
+
     @staticmethod
     def _silhouette_amount(t: float, plan: OverlayPlan) -> float:
         """1 = pure outline, 0 = full render."""
@@ -266,8 +273,8 @@ class FrameCompositor:
             if plan.blur_reveal:
                 frame = frame.filter(ImageFilter.GaussianBlur(30 * self.scale))
         if plan.hook:
-            self._paste_centered(frame, self.text_block(plan.hook, 104, plan.text_style),
-                                 self.safe_top + int(170 * self.scale))
+            hook_img = self.text_block(plan.hook, 104, plan.text_style)
+            self._paste_centered(frame, hook_img, self._below_label(hook_img))
         out_path.parent.mkdir(parents=True, exist_ok=True)
         frame.convert('RGB').save(out_path, quality=92)
         return out_path
