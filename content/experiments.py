@@ -18,7 +18,7 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Sequence
 
 import config
-from content.formats import FORMATS, TEXT_STYLES
+from content.formats import FORMATS, TEXT_STYLES, eligible_formats
 from rendering.color_generator import PALETTE_FAMILIES
 from rendering.presets import MATERIAL_PRESETS
 
@@ -102,10 +102,14 @@ class ExperimentEngine:
         return best
 
     # ------------------------------------------------------------ choices
-    def choose_variant(self, overrides: Optional[Dict] = None, include_llm_hook: bool = False) -> Dict:
+    def choose_variant(self, overrides: Optional[Dict] = None, include_llm_hook: bool = False,
+                       stats: Optional[Dict] = None) -> Dict:
+        """Pick one option per dimension. `stats` limits formats to ones that suit the model."""
         overrides = overrides or {}
         variant = {}
         for dim, arms in DIMENSIONS.items():
+            if dim == 'format':
+                arms = [a for a in arms if a in eligible_formats(stats)] or arms
             variant[dim] = overrides.get(dim) or self._sample(arms, self.arm_stats(dim))
         hook_key = self._sample(hook_arms(variant['format'], include_llm_hook), self.arm_stats('hook'))
         hook_index = str(overrides.get('hook_index', hook_key.split(':')[1]))

@@ -4,6 +4,8 @@ watch to the end, and comment, which is what all three algorithms reward.
 
 Hooks must be true for every video they're used on: no invented statistics.
 `ctas[i]` is the end-of-video call to action that answers `hooks[i]`.
+`eligible(stats)` limits a format to models it looks good on; `effect` is a
+Blender animation (rendering/effects.py) and `silhouette` a compositing effect.
 Placeholders like {triangles} are filled from the mesh analysis.
 """
 from typing import Dict, List
@@ -58,6 +60,51 @@ FORMATS: Dict[str, Dict] = {
         'stat_cards': True,
         'hashtags': ['#mechanicalengineering', '#cnc', '#machining', '#cad', '#engineering'],
     },
+    # A cutting plane opens the part up mid-spin. Curiosity about the inside keeps
+    # people watching; the cut closes again so the loop stays seamless.
+    'whats_inside': {
+        'hooks': [
+            "What's inside this part?",
+            'Wait for the cut',
+            'Guess what the inside looks like',
+        ],
+        'ctas': ['Did you expect that?', 'Did you expect that?', 'Were you right?'],
+        'motion': 'turntable',
+        'effect': 'cross_section',
+        'hook_seconds': 2.2,
+        # Long or thin parts get sliced into floating fragments; chunky ones look great.
+        'eligible': lambda stats: stats.get('aspect_ratio', 99) <= 3.5,
+        'hashtags': ['#cutaway', '#crosssection', '#howitsmade', '#cad', '#engineering'],
+    },
+    # Exploded view: the parts fly apart, then snap back together. The real part
+    # count (from the render) is the answer at the end, so viewers comment their count.
+    'how_many_parts': {
+        'hooks': [
+            'How many parts is this?',
+            'Count the parts',
+            'Watch it come apart',
+        ],
+        'ctas': ['How many did you count?', 'How many did you count?', 'How many did you see?'],
+        'motion': 'turntable',
+        'effect': 'explode',
+        'answer': 'parts',
+        'eligible': lambda stats: 2 <= stats.get('bodies', 1) <= 40,
+        'hashtags': ['#explodedview', '#assembly', '#productdesign', '#cad', '#engineering'],
+    },
+    # Spins as a flat silhouette, then fades into the full render. Same game as
+    # guess_the_object, harder, and the "lighting up" moment is a strong payoff.
+    'silhouette_guess': {
+        'hooks': [
+            'Guess it from the outline',
+            'Name it before it lights up',
+            'Can you name this shape?',
+        ],
+        'ctas': ['Comment your guess', 'Comment your guess', 'Comment your guess'],
+        'motion': 'turntable',
+        'silhouette': True,
+        'show_answer': True,
+        'hashtags': ['#silhouette', '#guessthat', '#puzzle', '#cad', '#3dmodel'],
+    },
 }
 
 # Broad tags that go on everything, trimmed per platform.
@@ -66,6 +113,13 @@ NICHE_HASHTAGS = ['#solidworks', '#fusion360', '#3dprinting', '#mechanicalengine
                   '#productdesign', '#3dmodeling', '#render', '#industrialdesign']
 
 TEXT_STYLES = ['stroke', 'pill']
+
+
+def eligible_formats(stats) -> List[str]:
+    """Formats that suit this model (all of them if there are no stats)."""
+    if not stats:
+        return list(FORMATS)
+    return [name for name, fmt in FORMATS.items() if fmt.get('eligible', lambda _: True)(stats)]
 
 
 def cta_for(fmt: str, hook_index) -> str:

@@ -37,6 +37,7 @@ def run_render(job: Dict, job_dir: Path, blender_bin: str, mode: str, timeout: i
     job_dir.mkdir(parents=True, exist_ok=True)
     job_file = job_dir / 'job.json'
     job_file.write_text(json.dumps(job, indent=2))
+    (job_dir / 'result.json').unlink(missing_ok=True)
 
     cmd = build_command(job_file, blender_bin, mode)
     logger.info('Blender: %s', ' '.join(cmd[:2]) + ' ...')

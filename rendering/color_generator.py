@@ -38,6 +38,13 @@ def rgb_to_hex(rgb: RGB) -> str:
     return '#' + ''.join(f'{max(0, min(255, round(c * 255))):02x}' for c in rgb)
 
 
+def accent_color(obj: RGB) -> RGB:
+    """Vivid complementary colour, used for the inside walls of a cutaway."""
+    h, s, _ = colorsys.rgb_to_hsv(*obj)
+    hue = (h + 0.5) % 1.0 if s > 0.15 else 0.07   # greys/whites get safety orange
+    return tuple(round(c, 4) for c in colorsys.hsv_to_rgb(hue, 0.85, 0.95))
+
+
 class ColorGenerator:
     def __init__(self, seed: Optional[int] = None):
         self.rng = random.Random(seed)

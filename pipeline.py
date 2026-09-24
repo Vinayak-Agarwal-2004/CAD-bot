@@ -1,6 +1,7 @@
 """
 End-to-end pipeline: models in, scheduled posts and learned preferences out.
 """
+import json
 import logging
 import random
 import shutil
@@ -12,7 +13,7 @@ from typing import Dict, List, Optional
 import config
 from content import llm
 from content.experiments import ExperimentEngine
-from content.formats import FORMATS, cta_for, fill_placeholders, stat_lines
+from content.formats import FORMATS, cta_for, eligible_formats, fill_placeholders, stat_lines
 from content.metadata import build_metadata
 from content.model_analyzer import evaluate, file_sha256
 from database.db_manager import DatabaseManager, utcnow
@@ -23,7 +24,7 @@ from publishing.scheduler import local_hour, next_slot
 from publishing.tiktok import TikTokPublisher
 from publishing.youtube import YouTubePublisher
 from rendering.blender_runner import run_render
-from rendering.color_generator import ColorGenerator
+from rendering.color_generator import ColorGenerator, accent_color
 from rendering.frame_compositor import FrameCompositor, OverlayPlan
 from rendering.video_compositor import VideoCompositor, pick_audio
 
@@ -120,7 +121,12 @@ class Pipeline:
                     preview: bool = False) -> Optional[int]:
         started = time.time()
         use_llm = config.USE_LLM and llm.llm_available()
-        variant = engine.choose_variant(overrides, include_llm_hook=use_llm)
+        overrides = dict(overrides or {})
+        forced = overrides.get('format')
+        if forced and forced not in eligible_formats(model['stats']):
+            logger.warning("Format %s doesn't suit %s; picking another", forced, Path(model['filepath']).name)
+            overrides.pop('format')
+        variant = engine.choose_variant(overrides, include_llm_hook=use_llm, stats=model['stats'])
         palette = ColorGenerator(self.rng.randrange(1 << 30)).get_color_palette(variant['palette'])
         recent_audio = [v['variant'].get('audio') for v in self.db.get_videos()[-8:]]
         audio = pick_audio(config.AUDIO_DIR, recent_audio, self.rng)
@@ -153,19 +159,25 @@ class Pipeline:
                 'elevation_deg': config.CAMERA_ELEVATION_ANGLE,
                 'tilt_swing_deg': config.CAMERA_ELEVATION_SWING,
                 'distance_margin': config.CAMERA_FRAMING_MARGIN,
+                'effect': FORMATS[variant['format']].get('effect'),
+                'interior_color': list(accent_color(palette['object_rgb'])),
             }
             raw_dir = run_render(job, work, config.BLENDER_BIN, config.BLENDER_MODE, config.RENDER_TIMEOUT)
             raw_frames = sorted(raw_dir.glob('frame_*.png'))
+            result_file = work / 'result.json'
+            render_facts = json.loads(result_file.read_text()) if result_file.exists() else {}
 
             fmt = FORMATS[variant['format']]
             compositor = FrameCompositor(config.VIDEO_WIDTH, config.VIDEO_HEIGHT, fps, config.FONT_PATH)
             base_plan = OverlayPlan(palette['background_top'], palette['background_bottom'])
-            hero_frame = raw_frames[len(raw_frames) // 8]
+            # Cover/LLM still: mid-effect (cut open, parts apart) for effect formats.
+            hero_frame = raw_frames[len(raw_frames) // 2 if fmt.get('effect') else len(raw_frames) // 8]
+            copy_stats = {**model['stats'], **({'parts': render_facts['parts']} if 'parts' in render_facts else {})}
 
             copy = None
             if use_llm:
                 still = compositor.preview_still(hero_frame, work / 'still.jpg', base_plan)
-                copy = llm.generate_copy(still, model['stats'], variant['format'], fmt['hooks'], config.LLM_MODEL)
+                copy = llm.generate_copy(still, copy_stats, variant['format'], fmt['hooks'], config.LLM_MODEL)
             if variant['hook_index'] == 'llm' and not (copy and copy.get('hook')):
                 variant['hook_index'] = 0          # Claude unavailable: fall back to a template hook
             hook = copy['hook'] if variant['hook_index'] == 'llm' else \
@@ -174,12 +186,15 @@ class Pipeline:
             answer = ''
             if fmt.get('show_answer') and copy and (copy.get('guess_confidence') or 0) >= 0.7:
                 answer = f"Looks like: {copy['object_guess']}"
+            if fmt.get('answer') == 'parts' and render_facts.get('parts'):
+                answer = f"Answer: {render_facts['parts']} parts"   # counted by Blender, not guessed
             plan = OverlayPlan(
                 palette['background_top'], palette['background_bottom'],
                 hook=hook, hook_seconds=fmt.get('hook_seconds', 2.8),
                 cta=cta_for(variant['format'], variant['hook_index']), answer=answer,
                 stat_lines=stat_lines(model['stats']) if fmt.get('stat_cards') else [],
-                blur_reveal=fmt.get('blur_reveal', False), text_style=variant['text_style'],
+                blur_reveal=fmt.get('blur_reveal', False),
+                silhouette_seconds=2.6 if fmt.get('silhouette') else 0.0, text_style=variant['text_style'],
                 series_label=f'{config.SERIES_NAME} #{video_id}' if config.SERIES_NAME else '',
                 handle=config.BRAND_HANDLE)
             compositor.compose(raw_dir, work / 'final', plan)
@@ -189,11 +204,14 @@ class Pipeline:
             encoder.encode(work / 'final', video_path, audio, preset='veryfast' if preview else 'medium')
             cover_path = compositor.cover(hero_frame, config.OUTPUT_DIR / f'cadbot_{video_id:05d}_cover.jpg', plan)
 
-            cover_seconds = len(raw_frames) // 8 / fps
+            cover_seconds = raw_frames.index(hero_frame) / fps
             if plan.blur_reveal:
                 cover_seconds = max(cover_seconds, plan.reveal_seconds + 0.3)
-            metadata = build_metadata(variant['format'], hook, model['stats'], copy, plan.series_label, self.rng)
+            if plan.silhouette_seconds:
+                cover_seconds = min(cover_seconds, plan.silhouette_seconds * 0.5)   # outline, no spoiler
+            metadata = build_metadata(variant['format'], hook, copy_stats, copy, plan.series_label, self.rng)
             metadata.update({'cover_time_ms': int(cover_seconds * 1000), 'audio': variant['audio'],
+                             'on_screen_answer': answer or None, 'render_facts': render_facts,
                              'variant': variant, 'model_file': Path(model['filepath']).name})
 
             silent = encoder.strip_audio(video_path, work / 'silent.mp4') if audio else video_path

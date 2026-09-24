@@ -30,6 +30,9 @@ DEFAULT_QUESTIONS = {
     'satisfying_spin': 'Which angle looks best to you?',
     'rate_the_design': 'Rate it 1-10 in the comments.',
     'specs_breakdown': 'How would you manufacture this?',
+    'whats_inside': 'Did the inside look like you expected?',
+    'how_many_parts': 'How many parts did you count?',
+    'silhouette_guess': 'What did you think it was from the outline?',
 }
 # Caption opener when Claude isn't writing copy (the hook is already on screen).
 DEFAULT_CAPTIONS = {
@@ -37,6 +40,9 @@ DEFAULT_CAPTIONS = {
     'satisfying_spin': 'One full turn of a CAD model, rendered in Blender.',
     'rate_the_design': 'A real CAD design from an open dataset, rendered in Blender.',
     'specs_breakdown': '{triangles} triangles of real CAD geometry, rendered in Blender.',
+    'whats_inside': 'A cutaway of a real CAD part, rendered in Blender.',
+    'how_many_parts': 'A real multi-part CAD model, exploded and reassembled in Blender.',
+    'silhouette_guess': 'A real CAD part, first as an outline, then fully rendered in Blender.',
 }
 BASE_KEYWORDS = ['cad model', '3d render', 'engineering design', 'blender render']
 

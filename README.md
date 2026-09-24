@@ -131,9 +131,18 @@ FORMAT
 | `satisfying_spin` | Minimal text, built purely for the loop. |
 | `rate_the_design` | Asking for a number is the easiest comment to leave. |
 | `specs_breakdown` | Real mesh facts (triangle count, holes, watertight) appear as cards. They give the engineering crowd something to argue about. |
+| `whats_inside` | A cutting plane opens the part mid-spin, and the inside walls show in a contrasting colour. The cut always faces the camera, so you look straight in, then it closes before the loop. Only used on chunky parts (aspect ratio ≤ 3.5); thin ones would be sliced into fragments. |
+| `how_many_parts` | Exploded view: the separate bodies fly apart (mostly vertically, to use the tall frame), then snap back together. The part count Blender actually found is shown as the answer at the end. Only used on models with 2–40 separate bodies. |
+| `silhouette_guess` | The part spins as a flat outline for 2.6 s, then fades into the full render. A harder guessing game with a strong payoff moment. |
+
+The experiment engine only picks formats that suit each model. If you force
+one with `--format` on a model it doesn't suit, another is picked. Covers for
+the guessing formats stay blurred or show only the outline, so the thumbnail
+doesn't give the answer away.
 
 Add your own in `content/formats.py`. Hooks must be true for every video they
-can be used on.
+can be used on. Blender-side animations go in `rendering/effects.py`
+(timing) and `rendering/blender_renderer.py` (scene).
 
 ## Configuration
 
@@ -150,7 +159,8 @@ Every setting in `config.py` can be overridden via an environment variable or
 ## Development
 
 ```bash
-python -m pytest        # 40+ tests; the ffmpeg test is skipped if ffmpeg is missing
+python -m pytest        # 60+ tests; ffmpeg tests skip if ffmpeg is missing
+RUN_BLENDER_TESTS=1 python -m pytest tests/test_blender_effects.py   # real Blender renders of each effect
 ```
 
 Layout: `rendering/` (Blender scene, frame compositing, encoding),

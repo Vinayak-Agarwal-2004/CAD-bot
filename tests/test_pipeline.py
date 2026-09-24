@@ -41,6 +41,12 @@ class FakePublisher(Publisher):
 
 
 def fake_render(job, job_dir, *_args):
+    result = {'effect': job.get('effect')}
+    if job.get('effect') == 'explode':
+        result['parts'] = 3
+    Path(job_dir).mkdir(parents=True, exist_ok=True)
+    (Path(job_dir) / 'job.json').write_text(json.dumps(job))   # as the real runner does
+    (Path(job_dir) / 'result.json').write_text(json.dumps(result))
     raw = Path(job['output_dir'])
     raw.mkdir(parents=True, exist_ok=True)
     for i in range(job['total_frames']):
@@ -164,3 +170,25 @@ def test_claude_skipped_without_credentials(monkeypatch, tmp_path):
     monkeypatch.setenv('HOME', str(tmp_path))
     assert llm.llm_available() is False
     assert llm.generate_copy(tmp_path / 'x.jpg', {}, 'guess_the_object', []) is None
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg not installed')
+def test_effect_formats_pass_render_facts_through(env):
+    pipe, _, tmp = env
+    pipe.scan()
+    lamp = next(m for m in pipe.db.get_models('pending') if m['stats']['bodies'] >= 2)
+    video_id = pipe.produce_one(lamp, pipe.engine(), {'format': 'how_many_parts', 'duration': 7.0})
+    video = pipe.db.get_video(video_id)
+    job = json.loads((tmp / 'work' / f'video_{video_id:05d}' / 'job.json').read_text())
+    assert job['effect'] == 'explode' and len(job['interior_color']) == 3
+    assert video['metadata']['on_screen_answer'] == 'Answer: 3 parts'   # Blender's count, not trimesh's
+    assert video['metadata']['render_facts']['parts'] == 3
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg not installed')
+def test_unsuitable_forced_format_falls_back(env):
+    pipe, _, _ = env
+    pipe.scan()
+    arc = next(m for m in pipe.db.get_models('pending') if m['stats']['aspect_ratio'] > 3.5)
+    video_id = pipe.produce_one(arc, pipe.engine(), {'format': 'whats_inside', 'duration': 7.0})
+    assert pipe.db.get_video(video_id)['variant']['format'] != 'whats_inside'

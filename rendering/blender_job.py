@@ -27,7 +27,9 @@ def main():
         use_gpu=job.get('use_gpu', True),
         gpu_backend=job.get('gpu_backend', 'AUTO'),
     )
-    renderer.render(job)
+    result = renderer.render(job)
+    # Facts the video can state (e.g. the real part count), read back by the pipeline.
+    (Path(job['output_dir']).parent / 'result.json').write_text(json.dumps(result))
     print('[cadbot] render finished')
 
 

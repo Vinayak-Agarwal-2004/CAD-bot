@@ -53,6 +53,8 @@ class OverlayPlan:
     stat_lines: List[str] = field(default_factory=list)
     blur_reveal: bool = False
     reveal_seconds: float = 2.4
+    silhouette_seconds: float = 0.0     # >0: flat outline until then, then fade to the render
+    silhouette_fade: float = 0.35
     text_style: str = 'stroke'          # 'stroke' or 'pill'
     series_label: str = ''
     handle: str = ''
@@ -169,6 +171,7 @@ class FrameCompositor:
         total = len(raw_frames)
         duration = total / self.fps
         bg = self.background(plan.background_top, plan.background_bottom).convert('RGBA')
+        silhouette_rgb = self.silhouette_color(bg)
 
         hook_img = self.text_block(plan.hook, 92, plan.text_style) if plan.hook else None
         cta_img = self.text_block(plan.cta, 78, plan.text_style, accent=(0.3, 0.9, 0.6)) if plan.cta else None
@@ -191,7 +194,13 @@ class FrameCompositor:
             obj = Image.open(raw_path).convert('RGBA')
             if obj.size != (self.width, self.height):
                 obj = obj.resize((self.width, self.height), Image.LANCZOS)
-            frame.alpha_composite(obj)
+            outline = self._silhouette_amount(t, plan)
+            if outline < 1.0:
+                frame.alpha_composite(obj)
+            if outline > 0.0:
+                shape = Image.new('RGBA', obj.size, (*silhouette_rgb, 255))
+                shape.putalpha(obj.getchannel('A').point(lambda a: int(a * outline)))
+                frame.alpha_composite(shape)
 
             if plan.blur_reveal and t < plan.reveal_seconds:
                 progress = t / plan.reveal_seconds
@@ -222,6 +231,21 @@ class FrameCompositor:
         return written
 
     @staticmethod
+    def _silhouette_amount(t: float, plan: OverlayPlan) -> float:
+        """1 = pure outline, 0 = full render."""
+        if plan.silhouette_seconds <= 0 or t >= plan.silhouette_seconds + plan.silhouette_fade:
+            return 0.0
+        if t <= plan.silhouette_seconds:
+            return 1.0
+        return 1.0 - (t - plan.silhouette_seconds) / plan.silhouette_fade
+
+    @staticmethod
+    def silhouette_color(bg: Image.Image) -> Tuple[int, int, int]:
+        """Near-black outline on light backgrounds, near-white on dark ones."""
+        mean = float(np.asarray(bg.convert('L').resize((8, 8))).mean())
+        return (18, 18, 22) if mean > 110 else (245, 245, 240)
+
+    @staticmethod
     def _faded(layer: Image.Image, alpha: float) -> Image.Image:
         layer = layer.copy()
         layer.putalpha(layer.getchannel('A').point(lambda a: int(a * alpha)))
@@ -229,10 +253,18 @@ class FrameCompositor:
 
     # ------------------------------------------------------------ cover
     def cover(self, raw_frame: Path, out_path: Path, plan: OverlayPlan) -> Path:
-        """Grid/thumbnail image: sharp model, big hook text."""
+        """Grid/thumbnail image: model plus big hook text. Guessing formats keep the
+        answer hidden (outline or blurred), so the thumbnail doesn't spoil the video."""
         frame = self.background(plan.background_top, plan.background_bottom).convert('RGBA')
         obj = Image.open(raw_frame).convert('RGBA').resize((self.width, self.height), Image.LANCZOS)
-        frame.alpha_composite(obj)
+        if plan.silhouette_seconds > 0:
+            shape = Image.new('RGBA', obj.size, (*self.silhouette_color(frame), 255))
+            shape.putalpha(obj.getchannel('A'))
+            frame.alpha_composite(shape)
+        else:
+            frame.alpha_composite(obj)
+            if plan.blur_reveal:
+                frame = frame.filter(ImageFilter.GaussianBlur(30 * self.scale))
         if plan.hook:
             self._paste_centered(frame, self.text_block(plan.hook, 104, plan.text_style),
                                  self.safe_top + int(170 * self.scale))
