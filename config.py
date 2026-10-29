@@ -59,6 +59,8 @@ RENDER_SCALE = _env('RENDER_SCALE', 1.0, float)
 
 # ---------------------------------------------------------------- rendering
 BLENDER_BIN = _env('BLENDER_BIN', 'blender')
+FFMPEG_BIN = _env('FFMPEG_BIN', 'ffmpeg')
+FFPROBE_BIN = _env('FFPROBE_BIN', 'ffprobe')
 # 'auto' uses the Blender executable if present, else the `bpy` pip module.
 BLENDER_MODE = _env('BLENDER_MODE', 'auto')
 RENDER_ENGINE = _env('RENDER_ENGINE', 'CYCLES')  # CYCLES or BLENDER_EEVEE_NEXT

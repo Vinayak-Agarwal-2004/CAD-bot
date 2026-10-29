@@ -15,5 +15,6 @@ __pycache__/
 .venv/
 venv/
 
-# Blender download from Setup.sh
+# Downloaded by install.sh
 blender/
+tools/

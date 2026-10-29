@@ -15,7 +15,10 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 FONT_CANDIDATES = [
-    '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',           # Debian/Ubuntu
+    '/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf',         # Oracle Linux/RHEL/Fedora
+    '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf',
+    '/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf',
     '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
     '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
     '/Library/Fonts/Arial Bold.ttf',
@@ -28,7 +31,13 @@ def find_font(preferred: str = '') -> str:
     for candidate in ([preferred] if preferred else []) + FONT_CANDIDATES:
         if candidate and Path(candidate).exists():
             return candidate
-    raise FileNotFoundError('No bold TTF font found; set FONT_PATH (e.g. install fonts-dejavu-core).')
+    # Last resort: any bold sans TTF the system has.
+    for pattern in ('DejaVuSans-Bold.ttf', 'LiberationSans-Bold.ttf', '*Sans*Bold.ttf'):
+        for root in ('/usr/share/fonts', '/usr/local/share/fonts'):
+            found = sorted(Path(root).rglob(pattern)) if Path(root).exists() else []
+            if found:
+                return str(found[0])
+    raise FileNotFoundError('No bold TTF font found; set FONT_PATH (or install DejaVu fonts).')
 
 
 def _rgb255(rgb: Sequence[float]) -> Tuple[int, int, int]:

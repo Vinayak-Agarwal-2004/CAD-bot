@@ -204,7 +204,7 @@ class Pipeline:
 
             video_path = config.OUTPUT_DIR / f'cadbot_{video_id:05d}.mp4'
             encoder = VideoCompositor(fps, config.VIDEO_CRF, config.AUDIO_VOLUME_DB, config.AUDIO_FADE_SECONDS,
-                                      config.RENDER_THREADS)
+                                      config.RENDER_THREADS, config.FFMPEG_BIN, config.FFPROBE_BIN)
             encoder.encode(work / 'final', video_path, audio, preset='veryfast' if preview else 'medium')
             cover_path = compositor.cover(cover_frame, config.OUTPUT_DIR / f'cadbot_{video_id:05d}_cover.jpg', plan)
 

@@ -5,6 +5,7 @@ from unittest import mock
 import pytest
 from PIL import Image
 
+import config
 from publishing.base import PublishError
 from publishing.instagram import InstagramPublisher
 from publishing.tiktok import MAX_SINGLE_CHUNK, TikTokPublisher, chunk_plan
@@ -59,16 +60,16 @@ def test_long_text_shrinks_to_fit_safe_zone():
     assert block.width <= comp.safe_right - comp.safe_left
 
 
-@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg not installed')
+@pytest.mark.skipif(shutil.which(config.FFMPEG_BIN) is None, reason='ffmpeg not installed')
 def test_encode_with_and_without_audio(tmp_path):
     _raw_frames(tmp_path / 'raw', 20)
     comp = FrameCompositor(W, H, FPS)
     comp.compose(tmp_path / 'raw', tmp_path / 'final', OverlayPlan((0, 0, 0), (1, 1, 1), hook='Hi'))
     audio = tmp_path / 'tone.wav'
     import subprocess
-    subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
+    subprocess.run([config.FFMPEG_BIN, '-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
                     str(audio)], check=True)
-    enc = VideoCompositor(fps=FPS)
+    enc = VideoCompositor(fps=FPS, ffmpeg_bin=config.FFMPEG_BIN, ffprobe_bin=config.FFPROBE_BIN)
     video = enc.encode(tmp_path / 'final', tmp_path / 'v.mp4', audio, preset='ultrafast')
     info = enc.probe(video)
     kinds = {s['codec_type'] for s in info['streams']}

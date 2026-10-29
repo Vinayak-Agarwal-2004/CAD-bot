@@ -79,7 +79,7 @@ def env(tmp_path, monkeypatch):
     return pipe, publishers, tmp_path
 
 
-@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg not installed')
+@pytest.mark.skipif(shutil.which(config.FFMPEG_BIN) is None, reason='ffmpeg not installed')
 def test_full_cycle(env):
     pipe, publishers, tmp = env
     counts = pipe.scan()
@@ -172,7 +172,7 @@ def test_claude_skipped_without_credentials(monkeypatch, tmp_path):
     assert llm.generate_copy(tmp_path / 'x.jpg', {}, 'guess_the_object', []) is None
 
 
-@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg not installed')
+@pytest.mark.skipif(shutil.which(config.FFMPEG_BIN) is None, reason='ffmpeg not installed')
 def test_effect_formats_pass_render_facts_through(env):
     pipe, _, tmp = env
     pipe.scan()
@@ -185,7 +185,7 @@ def test_effect_formats_pass_render_facts_through(env):
     assert video['metadata']['render_facts']['parts'] == 3
 
 
-@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='ffmpeg not installed')
+@pytest.mark.skipif(shutil.which(config.FFMPEG_BIN) is None, reason='ffmpeg not installed')
 def test_unsuitable_forced_format_falls_back(env):
     pipe, _, _ = env
     pipe.scan()

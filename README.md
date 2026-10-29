@@ -36,19 +36,44 @@ suppressed or banned, and they break each platform's terms of service.
 ## Quick start
 
 ```bash
-./Setup.sh                      # ffmpeg, fonts, Blender 4.2 LTS, Python venv
-. .venv/bin/activate
+git clone https://github.com/Vinayak-Agarwal-2004/CAD-bot.git && cd CAD-bot
+./install.sh                    # everything below, then a real test render
+source .venv/bin/activate
 python main.py scan             # register + score everything in data/stl_files
 python main.py produce -n 1 --preview   # fast half-res test video
 python main.py produce -n 5     # full quality
 ```
+
+`install.sh` is safe to re-run and only uses `sudo` for system packages and
+swap. Run it as your normal user. It:
+
+- installs system packages with apt (Ubuntu 22.04+, Debian 12+) or dnf
+  (Oracle Linux / RHEL / Rocky / Alma 8-9, Fedora);
+- finds Python 3.10+, installing Python 3.11 on Oracle Linux 9, where the default is 3.9;
+- downloads Blender 4.2.3 LTS from blender.org and verifies its SHA-256;
+- uses the system ffmpeg if it has H.264 and AAC, otherwise a checksum-verified
+  static build (Oracle Linux has no ffmpeg package);
+- installs the Python packages into `.venv`, isolated from system packages;
+- writes `.env` with the Blender/ffmpeg paths, GPU on/off, and low-memory
+  settings plus a 2 GB swap file on machines under 3 GB of RAM (your own
+  `.env` values are never overwritten);
+- finishes with `python main.py doctor --render-test`, a tiny real
+  Blender → frames → MP4 run.
+
+Options: `--cron` (schedule posting and nightly rendering), `--low-memory` /
+`--full-quality` (override the RAM-based choice), `--no-swap`,
+`--blender PATH` (use your own Blender 4.x), `--skip-test`.
+
+It was tested on clean Ubuntu 22.04, Ubuntu 24.04 and Oracle Linux 9 (as root,
+and as a sudo user under a 1 GB / 1 CPU limit). `python main.py doctor`
+re-checks the setup at any time.
 
 Finished videos land in `data/output_videos/`. Each one also gets a bundle in
 `data/exports/cadbot_NNNNN/` with the video, a no-music copy, the cover,
 per-platform captions, the first comment and a posting checklist. That's
 enough to post by hand without connecting any API.
 
-The code targets Blender 4.2 LTS, which `Setup.sh` downloads from blender.org.
+The code targets Blender 4.2 LTS, which `install.sh` downloads from blender.org.
 The `bpy` pip module also works if you can get a 4.2 build of it
 (`BLENDER_MODE=auto` picks whichever is available), but PyPI now only offers
 bpy 5.x, which this project hasn't been tested with.
@@ -102,7 +127,7 @@ core with Blender 4.2.3, for the lava-lamp sample model:
 | Full: 1080×1920, 32 samples, accurate denoise | ~1970 MB | ~90 s | ~5 h |
 | 720×1280, 16 samples, accurate denoise | ~1075 MB | ~25 s | ~1.5 h |
 | 540×960, 12 samples, accurate denoise | ~765 MB | ~12 s | ~45 min |
-| **540×960, 12 samples, fast denoise** | **~510 MB** | **~8 s** | **see below** |
+| **540×960, 12 samples, fast denoise** | **~510 MB** | **~4 s** | **~15 min** |
 
 Most of Blender's memory goes to the denoiser, not the image. Smaller render
 tiles don't help, but the denoiser's fast mode does. Turning the denoiser off
@@ -110,7 +135,12 @@ saves more (~350 MB) but leaves the image visibly grainy. The 540×960 frames
 are upscaled to 1080×1920; on a phone screen they look nearly identical, just
 slightly softer.
 
-For a 1 GB machine, put this in `.env`:
+The last row is a real end-to-end run: one complete 7-second "how many
+parts" video on one core in 15 minutes, with every process together
+(Python, Blender, ffmpeg) peaking at 725 MB.
+
+`install.sh` applies these settings automatically on machines under 3 GB of
+RAM, and adds a 2 GB swap file as a safety net:
 
 ```bash
 RENDER_SCALE=0.5
@@ -120,8 +150,8 @@ RENDER_THREADS=1
 USE_GPU=false
 ```
 
-Also add swap as a safety net (`sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`),
-render one video at a time (`produce -n 1`), and run `produce` overnight from cron.
+Render one video at a time (`produce -n 1`) and let cron do it overnight
+(`./install.sh --cron` renders one video a night on small machines).
 
 **Oracle Cloud's Always Free AMD micro instance** has 1 GB of RAM but only
 1/8 of a CPU as its guaranteed baseline. It can burst higher briefly, but a
@@ -132,11 +162,14 @@ times longer than the table above. The Always Free **Ampere A1** shape (up to
 
 ## Running it on autopilot
 
+`./install.sh --cron` adds these (re-running replaces them; `flock` stops a
+slow render from overlapping the next one):
+
 ```cron
 # every 15 min: post whatever is due
-*/15 * * * *  cd /path/to/CAD-bot && .venv/bin/python main.py publish
-# nightly: render tomorrow's videos, fill the calendar, pull stats
-0 2 * * *     cd /path/to/CAD-bot && .venv/bin/python main.py produce -n 6 && .venv/bin/python main.py schedule && .venv/bin/python main.py collect
+*/15 * * * *  cd /path/to/CAD-bot && flock -n /tmp/cadbot-publish.lock .venv/bin/python main.py publish >> logs/cron.log 2>&1
+# nightly: render new videos (1 on small machines, 3 otherwise), fill the calendar, pull stats
+30 1 * * *    cd /path/to/CAD-bot && flock -n /tmp/cadbot-produce.lock sh -c '... scan && ... produce -n 3 && ... schedule && ... collect' >> logs/cron.log 2>&1
 ```
 
 `python main.py report` shows each choice's lift over your typical post:
@@ -163,6 +196,7 @@ FORMAT
 | `auth youtube` | One-time OAuth login |
 | `link POST_ID REMOTE_ID` | Attach a TikTok draft's final video id |
 | `stats` | Pipeline counts |
+| `doctor [--render-test]` | Check Blender, ffmpeg, fonts, packages, memory vs settings, and connected platforms; optionally make a tiny real video |
 
 ## Formats
 

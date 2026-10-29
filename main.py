@@ -13,6 +13,7 @@ Instagram and TikTok.
     python main.py auth youtube         # one-time OAuth
     python main.py link 12 7301234567   # attach a TikTok draft's final video id to post 12
     python main.py stats
+    python main.py doctor --render-test # check the installation with a tiny real render
 """
 import argparse
 import json
@@ -95,6 +96,11 @@ def cmd_link(pipeline, args):
     print(f'Post {args.post_id} linked to {args.remote_id}')
 
 
+def cmd_doctor(args):
+    from utils.doctor import run
+    sys.exit(run(render=args.render_test))
+
+
 def cmd_stats(pipeline, args):
     print(json.dumps(pipeline.db.get_statistics(), indent=2))
 
@@ -131,6 +137,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser('report', help='show which choices perform best').set_defaults(func=cmd_report)
     sub.add_parser('stats', help='pipeline counts').set_defaults(func=cmd_stats)
 
+    doctor = sub.add_parser('doctor', help='check the installation (and optionally do a test render)')
+    doctor.add_argument('--render-test', action='store_true', help='make a tiny real video end to end')
+    doctor.set_defaults(func=cmd_doctor, standalone=True)
+
     run = sub.add_parser('run', help='scan, produce, schedule, publish and collect (for cron)')
     run.add_argument('-n', '--count', type=int, default=1)
     run.add_argument('--days', type=int, default=7)
@@ -158,6 +168,9 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     config.ensure_dirs()
     setup_logger(config.LOG_DIR)
+    if getattr(args, 'standalone', False):   # doctor must work even when the pipeline can't start
+        args.func(args)
+        return
     from pipeline import Pipeline
     args.func(Pipeline(), args)
 

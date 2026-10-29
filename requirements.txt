@@ -13,6 +13,8 @@ google-api-python-client>=2.100
 google-auth-oauthlib>=1.2
 google-auth-httplib2>=0.2
 python-dotenv>=1.0
+# Timezone data for the scheduler, in case the OS has none (minimal images)
+tzdata>=2024.1
 # Tests
 pytest>=8.0
 # Blender 4.2 LTS: Setup.sh downloads it from blender.org (the bpy pip module

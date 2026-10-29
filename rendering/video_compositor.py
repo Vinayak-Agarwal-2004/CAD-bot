@@ -24,7 +24,7 @@ class EncodeError(RuntimeError):
 
 def _run(cmd: List[str]):
     if shutil.which(cmd[0]) is None:
-        raise EncodeError(f'{cmd[0]} not found; install ffmpeg')
+        raise EncodeError(f'{cmd[0]} not found; run ./install.sh or set FFMPEG_BIN/FFPROBE_BIN')
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise EncodeError(f'{cmd[0]} failed:\n' + '\n'.join(result.stderr.strip().splitlines()[-15:]))
@@ -50,8 +50,11 @@ def pick_audio(audio_dir: Path, recently_used: Iterable[str] = (), rng: Optional
 
 class VideoCompositor:
     def __init__(self, fps: int = 30, crf: int = 18, loudness_lufs: float = -14.0,
-                 fade_seconds: float = 0.6, threads: int = 0):
+                 fade_seconds: float = 0.6, threads: int = 0,
+                 ffmpeg_bin: str = 'ffmpeg', ffprobe_bin: str = 'ffprobe'):
         self.fps = fps
+        self.ffmpeg = ffmpeg_bin
+        self.ffprobe = ffprobe_bin
         self.threads = threads
         self.crf = crf
         self.loudness = loudness_lufs
@@ -65,7 +68,7 @@ class VideoCompositor:
         duration = len(frames) / self.fps
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        cmd = ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error',
+        cmd = [self.ffmpeg, '-y', '-hide_banner', '-loglevel', 'error',
                '-framerate', str(self.fps), '-start_number', '1',
                '-i', str(frames_dir / 'frame_%04d.png')]
         if audio:
@@ -73,7 +76,8 @@ class VideoCompositor:
             cmd += ['-i', str(audio), '-filter_complex',
                     f'[1:a]apad,atrim=0:{duration:.3f},asetpts=PTS-STARTPTS,'
                     f'afade=t=in:d=0.25,afade=t=out:st={fade_out_start:.3f}:d={self.fade:.3f},'
-                    f'loudnorm=I={self.loudness}:TP=-1.5:LRA=11,aresample=48000[a]',
+                    f'loudnorm=I={self.loudness}:TP=-1.5:LRA=11,'
+                    f'aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[a]',
                     '-map', '0:v', '-map', '[a]', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000']
         cmd += ['-c:v', 'libx264', '-profile:v', 'high', '-pix_fmt', 'yuv420p',
                 '-crf', str(self.crf), '-preset', preset, '-r', str(self.fps),
@@ -85,16 +89,14 @@ class VideoCompositor:
                     f', audio: {audio.name}' if audio else ', silent')
         return output_path
 
-    @staticmethod
-    def strip_audio(video_path: Path, output_path: Path) -> Path:
+    def strip_audio(self, video_path: Path, output_path: Path) -> Path:
         """Silent copy, for adding a trending sound inside the TikTok/Instagram app."""
-        _run(['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error', '-i', str(video_path),
+        _run([self.ffmpeg, '-y', '-hide_banner', '-loglevel', 'error', '-i', str(video_path),
               '-c:v', 'copy', '-an', '-movflags', '+faststart', str(output_path)])
         return output_path
 
-    @staticmethod
-    def probe(video_path: Path) -> dict:
-        result = _run(['ffprobe', '-v', 'error', '-show_entries',
+    def probe(self, video_path: Path) -> dict:
+        result = _run([self.ffprobe, '-v', 'error', '-show_entries',
                        'format=duration,size:stream=codec_type,codec_name,width,height,r_frame_rate',
                        '-of', 'json', str(video_path)])
         return json.loads(result.stdout)
