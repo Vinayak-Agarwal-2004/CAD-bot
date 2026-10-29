@@ -137,7 +137,10 @@ slightly softer.
 
 The last row is a real end-to-end run: one complete 7-second "how many
 parts" video on one core in 15 minutes, with every process together
-(Python, Blender, ffmpeg) peaking at 725 MB.
+(Python, Blender, ffmpeg) peaking at 725 MB. In a second test, a fresh
+`./install.sh` on Oracle Linux 9 inside a hard 1 GB RAM / 1 CPU limit with
+no swap detected the small machine on its own, and then made a full
+10-second video in about 22 minutes.
 
 `install.sh` applies these settings automatically on machines under 3 GB of
 RAM, and adds a 2 GB swap file as a safety net:
