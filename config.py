@@ -66,6 +66,12 @@ RENDER_SAMPLES = _env('RENDER_SAMPLES', 32, int)  # denoised, so 32 looks clean
 USE_GPU = _env('USE_GPU', True, bool)
 GPU_BACKEND = _env('GPU_BACKEND', 'AUTO')  # AUTO, OPTIX, CUDA, HIP, METAL, ONEAPI
 RENDER_TIMEOUT = _env('RENDER_TIMEOUT', 3600, int)
+# CPU threads for Blender/ffmpeg. 0 = use every core. Set 1 on a small shared
+# server so rendering doesn't starve the publish/cron jobs.
+RENDER_THREADS = _env('RENDER_THREADS', 0, int)
+# Denoiser: 'accurate', 'fast' (much less memory, slightly softer) or 'off' (grainy).
+# The denoiser is most of Blender's memory use: see README "Small servers".
+RENDER_DENOISE = _env('RENDER_DENOISE', 'accurate')
 MAX_RENDER_ATTEMPTS = _env('MAX_RENDER_ATTEMPTS', 2, int)
 # Raw + composited PNG frames are ~0.5 GB per video; deleted after encoding unless set.
 KEEP_FRAMES = _env('KEEP_FRAMES', False, bool)

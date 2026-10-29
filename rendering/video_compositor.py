@@ -50,8 +50,9 @@ def pick_audio(audio_dir: Path, recently_used: Iterable[str] = (), rng: Optional
 
 class VideoCompositor:
     def __init__(self, fps: int = 30, crf: int = 18, loudness_lufs: float = -14.0,
-                 fade_seconds: float = 0.6):
+                 fade_seconds: float = 0.6, threads: int = 0):
         self.fps = fps
+        self.threads = threads
         self.crf = crf
         self.loudness = loudness_lufs
         self.fade = fade_seconds
@@ -76,6 +77,7 @@ class VideoCompositor:
                     '-map', '0:v', '-map', '[a]', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000']
         cmd += ['-c:v', 'libx264', '-profile:v', 'high', '-pix_fmt', 'yuv420p',
                 '-crf', str(self.crf), '-preset', preset, '-r', str(self.fps),
+                *(['-threads', str(self.threads)] if self.threads > 0 else []),
                 '-g', str(self.fps), '-movflags', '+faststart',
                 '-t', f'{duration:.3f}', str(output_path)]
         _run(cmd)

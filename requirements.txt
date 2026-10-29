@@ -15,5 +15,5 @@ google-auth-httplib2>=0.2
 python-dotenv>=1.0
 # Tests
 pytest>=8.0
-# Blender: either install Blender 4.2+ (Setup.sh does this) or, on Python 3.11,
-#   pip install bpy==4.2.0
+# Blender 4.2 LTS: Setup.sh downloads it from blender.org (the bpy pip module
+# also works, but PyPI now only has bpy 5.x, which is untested here).

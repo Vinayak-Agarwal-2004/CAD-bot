@@ -32,6 +32,8 @@ class BlenderRenderer:
         self.samples = samples
         self.use_gpu = use_gpu
         self.gpu_backend = gpu_backend
+        self.denoise = True
+        self.denoise_fast = False
 
     # ------------------------------------------------------------ scene
     def reset_scene(self):
@@ -41,8 +43,11 @@ class BlenderRenderer:
             scene.world = bpy.data.worlds.new('World')
         return scene
 
-    def configure_render(self, scene, width: int, height: int):
+    def configure_render(self, scene, width: int, height: int, threads: int = 0):
         scene.render.engine = self.engine
+        if threads > 0:
+            scene.render.threads_mode = 'FIXED'
+            scene.render.threads = threads
         scene.render.resolution_x = width
         scene.render.resolution_y = height
         scene.render.resolution_percentage = 100
@@ -67,7 +72,12 @@ class BlenderRenderer:
             cycles = scene.cycles
             cycles.samples = self.samples
             cycles.use_adaptive_sampling = True
-            cycles.use_denoising = True
+            cycles.use_denoising = self.denoise
+            if self.denoise_fast:   # far less memory (for ~1 GB servers), slightly softer
+                cycles.denoiser = 'OPENIMAGEDENOISE'
+                cycles.denoising_prefilter = 'FAST'
+                if hasattr(cycles, 'denoising_quality'):
+                    cycles.denoising_quality = 'FAST'
             cycles.max_bounces = 6
             cycles.device = 'GPU' if self.use_gpu and self._enable_gpu() else 'CPU'
             print(f'[cadbot] Cycles device: {cycles.device}')
@@ -322,7 +332,11 @@ class BlenderRenderer:
 
         width, height = job['width'], job['height']
         scene = self.reset_scene()
-        self.configure_render(scene, width, height)
+        # 'accurate' (default), 'fast' (~35% less memory, for 1 GB servers) or 'off'.
+        mode = job.get('denoise', 'accurate')
+        self.denoise = mode != 'off'
+        self.denoise_fast = mode == 'fast'
+        self.configure_render(scene, width, height, job.get('threads', 0))
 
         obj = self.import_stl(Path(job['stl_path']))
         self.normalize(obj)

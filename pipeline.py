@@ -152,6 +152,8 @@ class Pipeline:
                 'engine': config.RENDER_ENGINE,
                 'samples': 12 if preview else config.RENDER_SAMPLES,
                 'use_gpu': config.USE_GPU, 'gpu_backend': config.GPU_BACKEND,
+                'threads': config.RENDER_THREADS,
+                'denoise': config.RENDER_DENOISE,
                 'object_color': list(palette['object_rgb']),
                 'material': variant['material'],
                 'motion': variant['motion'],
@@ -201,7 +203,8 @@ class Pipeline:
             compositor.compose(raw_dir, work / 'final', plan)
 
             video_path = config.OUTPUT_DIR / f'cadbot_{video_id:05d}.mp4'
-            encoder = VideoCompositor(fps, config.VIDEO_CRF, config.AUDIO_VOLUME_DB, config.AUDIO_FADE_SECONDS)
+            encoder = VideoCompositor(fps, config.VIDEO_CRF, config.AUDIO_VOLUME_DB, config.AUDIO_FADE_SECONDS,
+                                      config.RENDER_THREADS)
             encoder.encode(work / 'final', video_path, audio, preset='veryfast' if preview else 'medium')
             cover_path = compositor.cover(cover_frame, config.OUTPUT_DIR / f'cadbot_{video_id:05d}_cover.jpg', plan)
 
